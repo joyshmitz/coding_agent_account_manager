@@ -13,6 +13,7 @@ type AuthMode string
 const (
 	AuthModeOAuth      AuthMode = "oauth"       // Browser-based OAuth flow (subscriptions)
 	AuthModeAPIKey     AuthMode = "api-key"     // API key authentication
+	AuthModeDeviceCode AuthMode = "device-code" // OAuth device code flow (RFC 8628)
 	AuthModeVertexADC  AuthMode = "vertex-adc"  // Vertex AI Application Default Credentials
 )
 
@@ -21,6 +22,17 @@ type AuthFileSpec struct {
 	Path        string // Absolute path to the auth file
 	Description string // Human-readable description
 	Required    bool   // Whether this file must exist for auth to work
+}
+
+// DeviceCodeProvider extends Provider with device code flow support.
+// Providers that do not support this flow do not need to implement this interface.
+type DeviceCodeProvider interface {
+	Provider
+
+	// SupportsDeviceCode returns true if this provider supports device code flow.
+	SupportsDeviceCode() bool
+	// LoginWithDeviceCode initiates device code authentication.
+	LoginWithDeviceCode(ctx context.Context, p *profile.Profile) error
 }
 
 // ProfileStatus represents the current authentication state of a profile.

@@ -15,19 +15,19 @@ type testProvider struct {
 	defaultBin  string
 }
 
-func (p *testProvider) ID() string                      { return p.id }
-func (p *testProvider) DisplayName() string             { return p.displayName }
-func (p *testProvider) DefaultBin() string              { return p.defaultBin }
-func (p *testProvider) SupportedAuthModes() []AuthMode  { return []AuthMode{AuthModeOAuth} }
-func (p *testProvider) AuthFiles() []AuthFileSpec       { return nil }
+func (p *testProvider) ID() string                     { return p.id }
+func (p *testProvider) DisplayName() string            { return p.displayName }
+func (p *testProvider) DefaultBin() string             { return p.defaultBin }
+func (p *testProvider) SupportedAuthModes() []AuthMode { return []AuthMode{AuthModeOAuth} }
+func (p *testProvider) AuthFiles() []AuthFileSpec      { return nil }
 func (p *testProvider) PrepareProfile(ctx context.Context, prof *profile.Profile) error {
 	return nil
 }
 func (p *testProvider) Env(ctx context.Context, prof *profile.Profile) (map[string]string, error) {
 	return nil, nil
 }
-func (p *testProvider) Login(ctx context.Context, prof *profile.Profile) error   { return nil }
-func (p *testProvider) Logout(ctx context.Context, prof *profile.Profile) error  { return nil }
+func (p *testProvider) Login(ctx context.Context, prof *profile.Profile) error  { return nil }
+func (p *testProvider) Logout(ctx context.Context, prof *profile.Profile) error { return nil }
 func (p *testProvider) Status(ctx context.Context, prof *profile.Profile) (*ProfileStatus, error) {
 	return nil, nil
 }
@@ -42,6 +42,7 @@ func TestAuthModeConstants(t *testing.T) {
 	}{
 		{AuthModeOAuth, "oauth"},
 		{AuthModeAPIKey, "api-key"},
+		{AuthModeDeviceCode, "device-code"},
 		{AuthModeVertexADC, "vertex-adc"},
 	}
 
