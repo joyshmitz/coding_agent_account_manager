@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -166,6 +167,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case stateConfirm:
 		return m.handleConfirmKeys(msg)
+	case stateSearch:
+		return m.handleSearchKeys(msg)
 	case stateHelp:
 		// Any key returns to list
 		m.state = stateList
@@ -262,6 +265,75 @@ func (m Model) handleConfirmKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleSearchKeys handles keys in search/filter mode.
+func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		// Cancel search and restore view
+		m.state = stateList
+		m.searchQuery = ""
+		m.statusMsg = ""
+		m.syncProfilesPanel() // Restore full list
+		return m, nil
+
+	case tea.KeyEnter:
+		// Accept current filter and return to list
+		m.state = stateList
+		if m.searchQuery != "" {
+			m.statusMsg = fmt.Sprintf("Filtered by: %s", m.searchQuery)
+		} else {
+			m.statusMsg = ""
+		}
+		return m, nil
+
+	case tea.KeyBackspace:
+		// Remove last character from search query
+		if len(m.searchQuery) > 0 {
+			m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+			m.applySearchFilter()
+		}
+		return m, nil
+
+	case tea.KeyRunes:
+		// Add typed characters to search query
+		m.searchQuery += string(msg.Runes)
+		m.applySearchFilter()
+		return m, nil
+	}
+	return m, nil
+}
+
+// applySearchFilter filters the profiles panel based on the search query.
+func (m *Model) applySearchFilter() {
+	if m.profilesPanel == nil {
+		return
+	}
+
+	provider := m.currentProvider()
+	profiles := m.profiles[provider]
+
+	// Filter profiles by name (case-insensitive)
+	var filtered []ProfileInfo
+	query := strings.ToLower(m.searchQuery)
+
+	for _, p := range profiles {
+		if query == "" || strings.Contains(strings.ToLower(p.Name), query) {
+			filtered = append(filtered, ProfileInfo{
+				Name:     p.Name,
+				AuthMode: "oauth",
+				LoggedIn: true,
+				Locked:   false,
+				IsActive: p.IsActive,
+			})
+		}
+	}
+
+	m.profilesPanel.SetProfiles(filtered)
+	m.selected = 0
+	m.profilesPanel.SetSelected(0)
+	m.statusMsg = fmt.Sprintf("/%s (%d matches)", m.searchQuery, len(filtered))
+}
+
 // handleActivateProfile activates the selected profile.
 func (m Model) handleActivateProfile() (tea.Model, tea.Cmd) {
 	profiles := m.currentProfiles()
@@ -309,6 +381,26 @@ func (m Model) handleLoginProfile() (tea.Model, tea.Cmd) {
 // handleOpenInBrowser opens the account page in browser.
 func (m Model) handleOpenInBrowser() (tea.Model, tea.Cmd) {
 	m.statusMsg = fmt.Sprintf("Open %s account page... (not yet implemented)", m.currentProvider())
+	return m, nil
+}
+
+// handleEditProfile opens the edit view for the selected profile.
+func (m Model) handleEditProfile() (tea.Model, tea.Cmd) {
+	profiles := m.currentProfiles()
+	if m.selected < 0 || m.selected >= len(profiles) {
+		m.statusMsg = "No profile selected"
+		return m, nil
+	}
+	profile := profiles[m.selected]
+	m.statusMsg = fmt.Sprintf("Edit '%s'... (not yet implemented)", profile.Name)
+	return m, nil
+}
+
+// handleEnterSearchMode enters search/filter mode.
+func (m Model) handleEnterSearchMode() (tea.Model, tea.Cmd) {
+	m.state = stateSearch
+	m.searchQuery = ""
+	m.statusMsg = "Type to filter profiles (Esc to cancel)"
 	return m, nil
 }
 
