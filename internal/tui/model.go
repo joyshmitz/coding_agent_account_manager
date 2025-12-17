@@ -47,6 +47,7 @@ type Model struct {
 	styles         Styles
 	providerPanel  *ProviderPanel
 	profilesPanel  *ProfilesPanel
+	detailPanel    *DetailPanel
 
 	// Status message
 	statusMsg string
@@ -78,6 +79,7 @@ func NewWithProviders(providers []string) Model {
 		styles:         DefaultStyles(),
 		providerPanel:  NewProviderPanel(providers),
 		profilesPanel:  profilesPanel,
+		detailPanel:    NewDetailPanel(),
 	}
 }
 
@@ -264,6 +266,32 @@ func (m Model) syncProfilesPanel() {
 	m.profilesPanel.SetSelected(m.selected)
 }
 
+// syncDetailPanel syncs the detail panel with the currently selected profile.
+func (m Model) syncDetailPanel() {
+	if m.detailPanel == nil {
+		return
+	}
+
+	// Get the selected profile
+	profiles := m.currentProfiles()
+	if m.selected < 0 || m.selected >= len(profiles) {
+		m.detailPanel.SetProfile(nil)
+		return
+	}
+
+	prof := profiles[m.selected]
+	detail := &DetailInfo{
+		Name:     prof.Name,
+		Provider: m.currentProvider(),
+		AuthMode: "oauth",  // TODO: get from actual profile
+		LoggedIn: true,     // TODO: get actual status
+		Locked:   false,    // TODO: get actual lock status
+		Path:     "",       // TODO: get from actual profile
+		Account:  "",       // TODO: get from actual profile
+	}
+	m.detailPanel.SetProfile(detail)
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
 	if m.width == 0 {
@@ -284,8 +312,9 @@ func (m Model) mainView() string {
 	header := m.styles.Header.Render("caam - Coding Agent Account Manager")
 
 	// Calculate panel dimensions
-	providerPanelWidth := 20
-	profilesPanelWidth := m.width - providerPanelWidth - 6 // Account for borders and spacing
+	providerPanelWidth := 18
+	detailPanelWidth := 35
+	profilesPanelWidth := m.width - providerPanelWidth - detailPanelWidth - 10 // Account for borders and spacing
 	if profilesPanelWidth < 40 {
 		profilesPanelWidth = 40
 	}
@@ -305,12 +334,22 @@ func (m Model) mainView() string {
 		profilesPanelView = m.renderProfileList()
 	}
 
+	// Sync and render detail panel (right panel)
+	var detailPanelView string
+	if m.detailPanel != nil {
+		m.syncDetailPanel()
+		m.detailPanel.SetSize(detailPanelWidth, contentHeight)
+		detailPanelView = m.detailPanel.View()
+	}
+
 	// Create panels side by side
 	panels := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		providerPanelView,
 		"  ", // Spacing
 		profilesPanelView,
+		"  ", // Spacing
+		detailPanelView,
 	)
 
 	// Status bar
