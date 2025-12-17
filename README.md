@@ -353,10 +353,6 @@ go install github.com/Dicklesworthstone/coding_agent_account_manager/cmd/caam@la
 
 ---
 
-## Contributing
-
-Issues and PRs welcome at [github.com/Dicklesworthstone/coding_agent_account_manager](https://github.com/Dicklesworthstone/coding_agent_account_manager).
-
 ## License
 
 MIT
