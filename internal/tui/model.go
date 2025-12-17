@@ -43,9 +43,10 @@ type Model struct {
 	err    error
 
 	// UI components
-	keys          keyMap
-	styles        Styles
-	providerPanel *ProviderPanel
+	keys           keyMap
+	styles         Styles
+	providerPanel  *ProviderPanel
+	profilesPanel  *ProfilesPanel
 
 	// Status message
 	statusMsg string
@@ -63,6 +64,10 @@ func New() Model {
 
 // NewWithProviders creates a new TUI model with the specified providers.
 func NewWithProviders(providers []string) Model {
+	profilesPanel := NewProfilesPanel()
+	if len(providers) > 0 {
+		profilesPanel.SetProvider(providers[0])
+	}
 	return Model{
 		providers:      providers,
 		activeProvider: 0,
@@ -72,6 +77,7 @@ func NewWithProviders(providers []string) Model {
 		keys:           defaultKeyMap(),
 		styles:         DefaultStyles(),
 		providerPanel:  NewProviderPanel(providers),
+		profilesPanel:  profilesPanel,
 	}
 }
 
@@ -127,6 +133,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.providerPanel.SetProfileCounts(counts)
 		}
+		// Update profiles panel with current provider's profiles
+		m.syncProfilesPanel()
 		return m, nil
 
 	case errMsg:
@@ -154,6 +162,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Up):
 		if m.selected > 0 {
 			m.selected--
+			if m.profilesPanel != nil {
+				m.profilesPanel.SetSelected(m.selected)
+			}
 		}
 		return m, nil
 
@@ -161,6 +172,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		profiles := m.currentProfiles()
 		if m.selected < len(profiles)-1 {
 			m.selected++
+			if m.profilesPanel != nil {
+				m.profilesPanel.SetSelected(m.selected)
+			}
 		}
 		return m, nil
 
@@ -168,6 +182,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeProvider > 0 {
 			m.activeProvider--
 			m.selected = 0
+			m.syncProfilesPanel()
 		}
 		return m, nil
 
@@ -175,6 +190,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeProvider < len(m.providers)-1 {
 			m.activeProvider++
 			m.selected = 0
+			m.syncProfilesPanel()
 		}
 		return m, nil
 
@@ -187,6 +203,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Cycle through providers
 		m.activeProvider = (m.activeProvider + 1) % len(m.providers)
 		m.selected = 0
+		m.syncProfilesPanel()
 		return m, nil
 	}
 
@@ -223,6 +240,30 @@ func (m *Model) syncProviderPanel() {
 	m.providerPanel.SetActiveProvider(m.activeProvider)
 }
 
+// syncProfilesPanel syncs the profiles panel with the current provider's profiles.
+func (m Model) syncProfilesPanel() {
+	if m.profilesPanel == nil {
+		return
+	}
+	provider := m.currentProvider()
+	m.profilesPanel.SetProvider(provider)
+
+	// Convert Profile to ProfileInfo
+	profiles := m.profiles[provider]
+	infos := make([]ProfileInfo, len(profiles))
+	for i, p := range profiles {
+		infos[i] = ProfileInfo{
+			Name:     p.Name,
+			AuthMode: "oauth", // Default, TODO: get from actual profile
+			LoggedIn: true,    // TODO: get actual status
+			Locked:   false,   // TODO: get actual lock status
+			IsActive: p.IsActive,
+		}
+	}
+	m.profilesPanel.SetProfiles(infos)
+	m.profilesPanel.SetSelected(m.selected)
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
 	if m.width == 0 {
@@ -244,6 +285,10 @@ func (m Model) mainView() string {
 
 	// Calculate panel dimensions
 	providerPanelWidth := 20
+	profilesPanelWidth := m.width - providerPanelWidth - 6 // Account for borders and spacing
+	if profilesPanelWidth < 40 {
+		profilesPanelWidth = 40
+	}
 	contentHeight := m.height - 5 // Header + status bar
 
 	// Sync and render provider panel
@@ -251,15 +296,21 @@ func (m Model) mainView() string {
 	m.providerPanel.SetSize(providerPanelWidth, contentHeight)
 	providerPanelView := m.providerPanel.View()
 
-	// Profile list (center panel)
-	profiles := m.renderProfileList()
+	// Sync and render profiles panel (center panel)
+	var profilesPanelView string
+	if m.profilesPanel != nil {
+		m.profilesPanel.SetSize(profilesPanelWidth, contentHeight)
+		profilesPanelView = m.profilesPanel.View()
+	} else {
+		profilesPanelView = m.renderProfileList()
+	}
 
 	// Create panels side by side
 	panels := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		providerPanelView,
 		"  ", // Spacing
-		profiles,
+		profilesPanelView,
 	)
 
 	// Status bar
