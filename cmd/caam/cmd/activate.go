@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cobra"
-	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/refresh"
+	"github.com/spf13/cobra"
 )
 
 // activateCmd restores auth files from the vault.
@@ -32,13 +31,13 @@ After activating, just run the tool normally - it will use the new account.`,
 
 func init() {
 	activateCmd.Flags().Bool("backup-current", false, "backup current auth before switching")
-	// Add to root in init() or let root.go do it? 
-	// root.go does rootCmd.AddCommand(activateCmd). 
+	// Add to root in init() or let root.go do it?
+	// root.go does rootCmd.AddCommand(activateCmd).
 	// Since both are in package cmd, it works.
 }
 
 func runActivate(cmd *cobra.Command, args []string) error {
-	ool := strings.ToLower(args[0])
+	tool := strings.ToLower(args[0])
 	profileName := args[1]
 
 	getFileSet, ok := tools[tool]
@@ -82,15 +81,13 @@ func refreshIfNeeded(ctx context.Context, provider, profile string) error {
 	// If we don't have health data, we don't know expiry, so we can't decide to refresh.
 	// `getProfileHealth` in root.go parses files.
 	// We should use that logic? `getProfileHealth` is in `root.go` (same package).
-	
 	h := getProfileHealth(provider, profile)
-	
+
 	if !refresh.ShouldRefresh(h, 0) {
 		return nil
 	}
 
-	fmt.Printf("Refreshing token (expires in %s)... ", 
-		health.FormatTimeRemaining(h.TokenExpiresAt))
+	fmt.Printf("Refreshing token (%s)... ", health.FormatTimeRemaining(h.TokenExpiresAt))
 
 	err := refresh.RefreshProfile(ctx, provider, profile, vault, healthStore)
 	if err != nil {

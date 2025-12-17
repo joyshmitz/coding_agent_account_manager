@@ -110,7 +110,7 @@ func TestUpdateGeminiHealth(t *testing.T) {
 	if h == nil {
 		t.Fatal("health profile not created")
 	}
-	
+
 	if h.TokenExpiresAt.IsZero() {
 		t.Error("expiry not set")
 	}

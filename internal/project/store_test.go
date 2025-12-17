@@ -1,6 +1,7 @@
 package project
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,5 +173,102 @@ func TestStore_Resolve_GlobSpecificity(t *testing.T) {
 	}
 	if got := resolved.Sources["codex"]; got != filepath.Clean(filepath.Join(base, "*", "client-a")) {
 		t.Fatalf("codex source = %q, want %q", got, filepath.Clean(filepath.Join(base, "*", "client-a")))
+	}
+}
+
+func TestStore_NormalizesProviderAndProfile(t *testing.T) {
+	base := t.TempDir()
+	work := filepath.Join(base, "work")
+
+	store := NewStore(filepath.Join(base, "projects.json"))
+
+	if err := store.SetAssociation(work, "  CLAUDE  ", "  work@company.com  "); err != nil {
+		t.Fatalf("SetAssociation() error = %v", err)
+	}
+	if err := store.SetDefault("  CODEX ", " main "); err != nil {
+		t.Fatalf("SetDefault() error = %v", err)
+	}
+
+	resolved, err := store.Resolve(work)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if got := resolved.Profiles["claude"]; got != "work@company.com" {
+		t.Fatalf("claude = %q, want %q", got, "work@company.com")
+	}
+	if got := resolved.Profiles["codex"]; got != "main" {
+		t.Fatalf("codex = %q, want %q", got, "main")
+	}
+
+	// Ensure on-disk representation is normalized too.
+	key, err := normalizeKey(work)
+	if err != nil {
+		t.Fatalf("normalizeKey() error = %v", err)
+	}
+	data, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := data.Associations[key]["claude"]; got != "work@company.com" {
+		t.Fatalf("stored associations[%s][claude] = %q, want %q", key, got, "work@company.com")
+	}
+	if got := data.Defaults["codex"]; got != "main" {
+		t.Fatalf("stored defaults[codex] = %q, want %q", got, "main")
+	}
+}
+
+func TestStore_NormalizesExistingStoredData(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "projects.json")
+	work := filepath.Join(base, "work")
+
+	key, err := normalizeKey(work)
+	if err != nil {
+		t.Fatalf("normalizeKey() error = %v", err)
+	}
+
+	// Seed a file with unnormalized keys/values (as if edited manually or from older versions).
+	seed := &StoreData{
+		Version: 1,
+		Associations: map[string]map[string]string{
+			key: {"  CLAUDE  ": "  work@company.com  "},
+		},
+		Defaults: map[string]string{
+			"  CODEX  ": " main ",
+		},
+	}
+	raw, err := json.MarshalIndent(seed, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := NewStore(path)
+
+	// Ensure a normal command works even if the stored provider key is unnormalized.
+	if err := store.RemoveAssociation(work, "claude"); err != nil {
+		t.Fatalf("RemoveAssociation() error = %v", err)
+	}
+
+	// Ensure setting a normalized default doesn't leave multiple variants behind.
+	if err := store.SetDefault("codex", "secondary"); err != nil {
+		t.Fatalf("SetDefault() error = %v", err)
+	}
+
+	data, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, ok := data.Associations[key]; ok {
+		t.Fatalf("expected associations[%s] to be removed", key)
+	}
+	if got := data.Defaults["codex"]; got != "secondary" {
+		t.Fatalf("defaults[codex] = %q, want %q", got, "secondary")
+	}
+	if _, ok := data.Defaults["  CODEX  "]; ok {
+		t.Fatalf("expected unnormalized default key to be removed")
 	}
 }

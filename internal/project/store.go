@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -100,6 +102,8 @@ func (s *Store) Save(store *StoreData) error {
 }
 
 func (s *Store) SetAssociation(projectPath, provider, profile string) error {
+	provider = normalizeProvider(provider)
+	profile = strings.TrimSpace(profile)
 	if provider == "" {
 		return fmt.Errorf("provider cannot be empty")
 	}
@@ -126,6 +130,7 @@ func (s *Store) SetAssociation(projectPath, provider, profile string) error {
 }
 
 func (s *Store) RemoveAssociation(projectPath, provider string) error {
+	provider = normalizeProvider(provider)
 	if provider == "" {
 		return fmt.Errorf("provider cannot be empty")
 	}
@@ -167,6 +172,8 @@ func (s *Store) DeleteProject(projectPath string) error {
 }
 
 func (s *Store) SetDefault(provider, profile string) error {
+	provider = normalizeProvider(provider)
+	profile = strings.TrimSpace(profile)
 	if provider == "" {
 		return fmt.Errorf("provider cannot be empty")
 	}
@@ -211,11 +218,16 @@ func (s *Store) Resolve(dir string) (*Resolved, error) {
 	}
 
 	for provider, profile := range store.Defaults {
-		if _, ok := resolved.Profiles[provider]; ok {
+		normalizedProvider := normalizeProvider(provider)
+		profile = strings.TrimSpace(profile)
+		if normalizedProvider == "" || profile == "" {
 			continue
 		}
-		resolved.Profiles[provider] = profile
-		resolved.Sources[provider] = "<default>"
+		if _, ok := resolved.Profiles[normalizedProvider]; ok {
+			continue
+		}
+		resolved.Profiles[normalizedProvider] = profile
+		resolved.Sources[normalizedProvider] = "<default>"
 	}
 
 	return resolved, nil
@@ -227,6 +239,8 @@ func applyIfUnset(resolved *Resolved, assoc map[string]string, source string) {
 	}
 
 	for provider, profile := range assoc {
+		provider = normalizeProvider(provider)
+		profile = strings.TrimSpace(profile)
 		if provider == "" || profile == "" {
 			continue
 		}
@@ -236,6 +250,10 @@ func applyIfUnset(resolved *Resolved, assoc map[string]string, source string) {
 		resolved.Profiles[provider] = profile
 		resolved.Sources[provider] = source
 	}
+}
+
+func normalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
 }
 
 func parentDirs(path string) []string {
@@ -284,4 +302,71 @@ func normalizeStoreData(store *StoreData) {
 	if store.Defaults == nil {
 		store.Defaults = make(map[string]string)
 	}
+
+	store.Defaults = normalizeProviderMap(store.Defaults)
+	store.Associations = normalizeAssociations(store.Associations)
+}
+
+func normalizeProviderMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return make(map[string]string)
+	}
+
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string]string, len(in))
+	for _, k := range keys {
+		provider := normalizeProvider(k)
+		profile := strings.TrimSpace(in[k])
+		if provider == "" || profile == "" {
+			continue
+		}
+		out[provider] = profile
+	}
+	return out
+}
+
+func normalizeAssociations(in map[string]map[string]string) map[string]map[string]string {
+	if len(in) == 0 {
+		return make(map[string]map[string]string)
+	}
+
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string]map[string]string, len(in))
+	for _, k := range keys {
+		assoc := in[k]
+		if len(assoc) == 0 {
+			continue
+		}
+
+		normalizedKey, err := normalizeKey(k)
+		if err != nil {
+			continue
+		}
+
+		normalizedAssoc := normalizeProviderMap(assoc)
+		if len(normalizedAssoc) == 0 {
+			continue
+		}
+
+		// Merge in case multiple keys normalize to the same path.
+		existing := out[normalizedKey]
+		if existing == nil {
+			out[normalizedKey] = normalizedAssoc
+			continue
+		}
+		for provider, profile := range normalizedAssoc {
+			existing[provider] = profile
+		}
+	}
+	return out
 }

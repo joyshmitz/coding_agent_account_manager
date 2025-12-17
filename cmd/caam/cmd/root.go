@@ -4,8 +4,8 @@
 // for "all you can eat" subscription plans (GPT Pro, Claude Max, Gemini Ultra).
 //
 // Two modes of operation:
-//   1. Auth file swapping (PRIMARY): backup/activate to instantly switch accounts
-//   2. Profile isolation: run tools with isolated HOME/CODEX_HOME for simultaneous sessions
+//  1. Auth file swapping (PRIMARY): backup/activate to instantly switch accounts
+//  2. Profile isolation: run tools with isolated HOME/CODEX_HOME for simultaneous sessions
 package cmd
 
 import (
@@ -14,7 +14,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/config"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/exec"
@@ -26,12 +25,14 @@ import (
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/gemini"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/tui"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/version"
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 var (
 	vault        *authfile.Vault
 	profileStore *profile.Store
+	healthStore  *health.Storage
 	registry     *provider.Registry
 	cfg          *config.Config
 	runner       *exec.Runner
@@ -81,6 +82,9 @@ Run 'caam' without arguments to launch the interactive TUI.`,
 
 		// Initialize profile store
 		profileStore = profile.NewStore(profile.DefaultStorePath())
+
+		// Initialize health store (Smart Profile Management metadata).
+		healthStore = health.NewStorage("")
 
 		// Initialize provider registry
 		registry = provider.NewRegistry()

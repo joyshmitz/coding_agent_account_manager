@@ -101,7 +101,7 @@ func TestUpdateCodexAuth(t *testing.T) {
 	if updatedAuth["refresh_token"] != "new-refresh" {
 		t.Errorf("refresh_token not updated")
 	}
-	
+
 	// Check expiry update (should be > initial)
 	if val, ok := updatedAuth["expires_at"].(float64); !ok || val <= 1500000000 {
 		t.Errorf("expires_at not updated correctly: %v", updatedAuth["expires_at"])

@@ -103,7 +103,7 @@ func TestUpdateClaudeAuth(t *testing.T) {
 	if updatedAuth["other_field"] != "preserve-me" {
 		t.Errorf("other_field not preserved")
 	}
-	
+
 	// Check expiry update (approximate)
 	if _, ok := updatedAuth["expires_at"]; !ok {
 		t.Error("expires_at missing")

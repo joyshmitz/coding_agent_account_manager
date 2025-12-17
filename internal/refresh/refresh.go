@@ -50,45 +50,45 @@ func refreshClaude(ctx context.Context, vaultPath string) error {
 	if err != nil {
 		return fmt.Errorf("parse auth: %w", err)
 	}
-	
+
 	if info.Source == "" {
 		return fmt.Errorf("auth file source unknown")
 	}
-	
+
 	refreshToken, err := getRefreshTokenFromJSON(info.Source)
 	if err != nil {
 		return fmt.Errorf("read refresh token: %w", err)
 	}
-	
+
 	resp, err := RefreshClaudeToken(ctx, refreshToken)
 	if err != nil {
 		return fmt.Errorf("refresh api: %w", err)
 	}
-	
+
 	if err := UpdateClaudeAuth(info.Source, resp); err != nil {
 		return fmt.Errorf("update auth: %w", err)
 	}
-	
+
 	return nil
 }
 
 func refreshCodex(ctx context.Context, vaultPath string) error {
 	authPath := filepath.Join(vaultPath, "auth.json")
-	
+
 	refreshToken, err := getRefreshTokenFromJSON(authPath)
 	if err != nil {
 		return fmt.Errorf("read refresh token: %w", err)
 	}
-	
+
 	resp, err := RefreshCodexToken(ctx, refreshToken)
 	if err != nil {
 		return fmt.Errorf("refresh api: %w", err)
 	}
-	
+
 	if err := UpdateCodexAuth(authPath, resp); err != nil {
 		return fmt.Errorf("update auth: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -97,21 +97,21 @@ func refreshGemini(ctx context.Context, provider, profile string, store *health.
 	if err != nil {
 		return fmt.Errorf("parse gemini auth: %w", err)
 	}
-	
+
 	adc, err := ReadADC(info.Source)
 	if err != nil {
 		return fmt.Errorf("read adc: %w", err)
 	}
-	
+
 	resp, err := RefreshGeminiToken(ctx, adc.ClientID, adc.ClientSecret, adc.RefreshToken)
 	if err != nil {
 		return fmt.Errorf("refresh api: %w", err)
 	}
-	
+
 	if err := UpdateGeminiHealth(store, provider, profile, resp); err != nil {
 		return fmt.Errorf("update health: %w", err)
 	}
-	
+
 	return nil
 }
 
