@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/config"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/refresh"
 	"github.com/spf13/cobra"
@@ -12,7 +14,7 @@ import (
 
 // activateCmd restores auth files from the vault.
 var activateCmd = &cobra.Command{
-	Use:     "activate <tool> <profile-name>",
+	Use:     "activate <tool> [profile-name]",
 	Aliases: []string{"switch", "use"},
 	Short:   "Activate a profile (instant switch)",
 	Long: `Restores auth files from the vault, instantly switching to that account.
@@ -21,11 +23,12 @@ This is the magic command - sub-second account switching without any login flows
 
 Examples:
   caam activate codex work-account
+  caam activate codex
   caam activate claude personal-max
   caam activate gemini team-ultra
 
 After activating, just run the tool normally - it will use the new account.`,
-	Args: cobra.ExactArgs(2),
+	Args: cobra.RangeArgs(1, 2),
 	RunE: runActivate,
 }
 
@@ -38,7 +41,20 @@ func init() {
 
 func runActivate(cmd *cobra.Command, args []string) error {
 	tool := strings.ToLower(args[0])
-	profileName := args[1]
+	var profileName string
+	if len(args) == 2 {
+		profileName = args[1]
+	} else {
+		var source string
+		var err error
+		profileName, source, err = resolveActivateProfile(tool)
+		if err != nil {
+			return err
+		}
+		if source != "" {
+			fmt.Printf("Using %s: %s/%s\n", source, tool, profileName)
+		}
+	}
 
 	getFileSet, ok := tools[tool]
 	if !ok {
@@ -73,6 +89,39 @@ func runActivate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Activated %s profile '%s'\n", tool, profileName)
 	fmt.Printf("  Run '%s' to start using this account\n", tool)
 	return nil
+}
+
+func resolveActivateProfile(tool string) (profileName string, source string, err error) {
+	// Prefer project association (if enabled).
+	spmCfg, err := config.LoadSPMConfig()
+	if err == nil && spmCfg.Project.Enabled && projectStore != nil {
+		cwd, wdErr := os.Getwd()
+		if wdErr != nil {
+			return "", "", fmt.Errorf("get current directory: %w", wdErr)
+		}
+		resolved, resErr := projectStore.Resolve(cwd)
+		if resErr == nil {
+			if p := strings.TrimSpace(resolved.Profiles[tool]); p != "" {
+				src := resolved.Sources[tool]
+				if src == "" || src == cwd {
+					return p, "project association", nil
+				}
+				if src == "<default>" {
+					return p, "project default", nil
+				}
+				return p, "project association", nil
+			}
+		}
+	}
+
+	// Fall back to configured default profile (caam config.json).
+	if cfg != nil {
+		if p := strings.TrimSpace(cfg.GetDefault(tool)); p != "" {
+			return p, "default profile", nil
+		}
+	}
+
+	return "", "", fmt.Errorf("no profile specified for %s and no project association/default found\nHint: run 'caam activate %s <profile-name>', 'caam use %s <profile-name>', or 'caam project set %s <profile-name>'", tool, tool, tool, tool)
 }
 
 func refreshIfNeeded(ctx context.Context, provider, profile string) error {

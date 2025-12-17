@@ -66,6 +66,7 @@ func TestSubcommandRegistration(t *testing.T) {
 		"version",
 		"backup",
 		"activate",
+		"project",
 		"export",
 		"import",
 		"status",
@@ -152,7 +153,7 @@ func TestBackupCommandFlags(t *testing.T) {
 
 // TestActivateCommandFlags tests the activate command flags and aliases.
 func TestActivateCommandFlags(t *testing.T) {
-	if activateCmd.Use != "activate <tool> <profile-name>" {
+	if activateCmd.Use != "activate <tool> [profile-name]" {
 		t.Errorf("Unexpected Use: %q", activateCmd.Use)
 	}
 
@@ -451,7 +452,7 @@ func TestCommandUsageStrings(t *testing.T) {
 		expected string
 	}{
 		{backupCmd, "backup <tool> <profile-name>"},
-		{activateCmd, "activate <tool> <profile-name>"},
+		{activateCmd, "activate <tool> [profile-name]"},
 		{statusCmd, "status [tool]"},
 		{lsCmd, "ls [tool]"},
 		{deleteCmd, "delete <tool> <profile-name>"},

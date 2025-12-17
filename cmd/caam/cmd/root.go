@@ -19,6 +19,7 @@ import (
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/exec"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/project"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/claude"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/codex"
@@ -32,6 +33,7 @@ import (
 var (
 	vault        *authfile.Vault
 	profileStore *profile.Store
+	projectStore *project.Store
 	healthStore  *health.Storage
 	registry     *provider.Registry
 	cfg          *config.Config
@@ -82,6 +84,9 @@ Run 'caam' without arguments to launch the interactive TUI.`,
 
 		// Initialize profile store
 		profileStore = profile.NewStore(profile.DefaultStorePath())
+
+		// Initialize project store (project-profile associations).
+		projectStore = project.NewStore(project.DefaultPath())
 
 		// Initialize health store (Smart Profile Management metadata).
 		healthStore = health.NewStorage("")
