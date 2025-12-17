@@ -48,7 +48,8 @@ type RunOptions struct {
 func (r *Runner) Run(ctx context.Context, opts RunOptions) error {
 	// Lock profile if not disabled
 	if !opts.NoLock {
-		if err := opts.Profile.Lock(); err != nil {
+		// Use LockWithCleanup to handle stale locks from dead processes
+		if err := opts.Profile.LockWithCleanup(); err != nil {
 			return fmt.Errorf("lock profile: %w", err)
 		}
 		defer opts.Profile.Unlock()

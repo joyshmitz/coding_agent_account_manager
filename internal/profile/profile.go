@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -135,6 +136,106 @@ func (p *Profile) Unlock() error {
 		return err
 	}
 	return nil
+}
+
+// LockInfo contains information about a lock file.
+type LockInfo struct {
+	PID      int       `json:"pid"`
+	LockedAt time.Time `json:"locked_at"`
+}
+
+// GetLockInfo reads and parses the lock file.
+// Returns nil, nil if no lock file exists.
+func (p *Profile) GetLockInfo() (*LockInfo, error) {
+	lockPath := p.LockPath()
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read lock file: %w", err)
+	}
+
+	var info LockInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("parse lock file: %w", err)
+	}
+
+	return &info, nil
+}
+
+// IsProcessAlive checks if a process with the given PID is still running.
+// On Unix, this sends signal 0 to check if the process exists.
+func IsProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	// On Unix, Signal(0) checks if the process exists without actually sending a signal
+	err = process.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+// IsLockStale checks if the lock file is from a dead process.
+// Returns true if the lock exists but the owning process is no longer running.
+// Returns false if no lock exists, or if the lock owner is still alive.
+func (p *Profile) IsLockStale() (bool, error) {
+	info, err := p.GetLockInfo()
+	if err != nil {
+		return false, err
+	}
+	if info == nil {
+		// No lock file exists
+		return false, nil
+	}
+
+	// Check if the process is still running
+	if IsProcessAlive(info.PID) {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// CleanStaleLock removes a stale lock file if the owning process is dead.
+// Returns true if a stale lock was cleaned, false if no action was taken.
+// Returns an error if there's a valid lock or an I/O error.
+func (p *Profile) CleanStaleLock() (bool, error) {
+	stale, err := p.IsLockStale()
+	if err != nil {
+		return false, err
+	}
+	if !stale {
+		return false, nil
+	}
+
+	// Remove the stale lock
+	if err := p.Unlock(); err != nil {
+		return false, fmt.Errorf("remove stale lock: %w", err)
+	}
+
+	return true, nil
+}
+
+// LockWithCleanup attempts to acquire a lock, cleaning stale locks first.
+// This is the recommended method for acquiring locks.
+func (p *Profile) LockWithCleanup() error {
+	// Try to clean any stale locks first
+	cleaned, err := p.CleanStaleLock()
+	if err != nil {
+		return fmt.Errorf("check stale lock: %w", err)
+	}
+	if cleaned {
+		// Log that we cleaned a stale lock (caller can check this if needed)
+	}
+
+	// Now try to acquire the lock
+	return p.Lock()
 }
 
 // Save persists the profile metadata to disk.
