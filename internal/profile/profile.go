@@ -100,11 +100,14 @@ func (p *Profile) BrowserDisplayName() string {
 	if p.BrowserProfileName != "" {
 		return p.BrowserProfileName
 	}
-	if p.BrowserProfileDir != "" {
+	if p.BrowserCommand != "" && p.BrowserProfileDir != "" {
 		return fmt.Sprintf("%s (%s)", p.BrowserCommand, p.BrowserProfileDir)
 	}
 	if p.BrowserCommand != "" {
 		return p.BrowserCommand
+	}
+	if p.BrowserProfileDir != "" {
+		return p.BrowserProfileDir
 	}
 	return "system default"
 }
