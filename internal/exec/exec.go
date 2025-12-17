@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/user/caam/internal/profile"
-	"github.com/user/caam/internal/provider"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
 )
 
 // Runner executes AI CLI tools with profile isolation.

@@ -42,6 +42,22 @@ type Profile struct {
 
 	// Metadata stores provider-specific configuration.
 	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// BrowserCommand is the browser executable to use for OAuth flows.
+	// Examples: "google-chrome", "firefox", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	// If empty, uses system default browser.
+	BrowserCommand string `json:"browser_command,omitempty"`
+
+	// BrowserProfileDir is the browser profile directory or name.
+	// For Chrome: "Profile 1", "Default", or full path to profile directory
+	// For Firefox: profile name as shown in about:profiles
+	// If empty, uses browser's default profile.
+	BrowserProfileDir string `json:"browser_profile_dir,omitempty"`
+
+	// BrowserProfileName is a human-friendly label for the browser profile.
+	// Examples: "Work Google", "Personal GitHub"
+	// Used for display purposes only.
+	BrowserProfileName string `json:"browser_profile_name,omitempty"`
 }
 
 // HomePath returns the pseudo-HOME directory for this profile.
@@ -70,6 +86,26 @@ func (p *Profile) LockPath() string {
 // MetaPath returns the path to the profile metadata file.
 func (p *Profile) MetaPath() string {
 	return filepath.Join(p.BasePath, "profile.json")
+}
+
+// HasBrowserConfig returns true if browser configuration is set.
+func (p *Profile) HasBrowserConfig() bool {
+	return p.BrowserCommand != "" || p.BrowserProfileDir != ""
+}
+
+// BrowserDisplayName returns a display name for the browser profile.
+// Returns BrowserProfileName if set, otherwise a generated description.
+func (p *Profile) BrowserDisplayName() string {
+	if p.BrowserProfileName != "" {
+		return p.BrowserProfileName
+	}
+	if p.BrowserProfileDir != "" {
+		return fmt.Sprintf("%s (%s)", p.BrowserCommand, p.BrowserProfileDir)
+	}
+	if p.BrowserCommand != "" {
+		return p.BrowserCommand
+	}
+	return "system default"
 }
 
 // IsLocked checks if the profile is currently locked (in use).

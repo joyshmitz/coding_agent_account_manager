@@ -17,7 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/user/caam/internal/profile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
 )
 
 // DefaultPassthroughs returns the default set of paths to symlink.

@@ -4,7 +4,7 @@ package provider
 import (
 	"context"
 
-	"github.com/user/caam/internal/profile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
 )
 
 // AuthMode represents the authentication method used by a profile.

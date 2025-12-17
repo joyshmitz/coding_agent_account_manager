@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/user/caam/cmd/caam/cmd"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/cmd/caam/cmd"
 )
 
 func main() {

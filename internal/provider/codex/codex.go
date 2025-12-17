@@ -25,9 +25,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/user/caam/internal/passthrough"
-	"github.com/user/caam/internal/profile"
-	"github.com/user/caam/internal/provider"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/passthrough"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
 )
 
 // Provider implements the Codex CLI adapter.

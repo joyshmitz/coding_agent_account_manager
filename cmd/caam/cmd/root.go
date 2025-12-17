@@ -15,15 +15,15 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/user/caam/internal/authfile"
-	"github.com/user/caam/internal/config"
-	"github.com/user/caam/internal/exec"
-	"github.com/user/caam/internal/profile"
-	"github.com/user/caam/internal/provider"
-	"github.com/user/caam/internal/provider/claude"
-	"github.com/user/caam/internal/provider/codex"
-	"github.com/user/caam/internal/provider/gemini"
-	"github.com/user/caam/internal/version"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/config"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/exec"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/claude"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/codex"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/gemini"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/version"
 )
 
 var (
