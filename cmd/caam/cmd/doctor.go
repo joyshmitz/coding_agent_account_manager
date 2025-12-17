@@ -432,7 +432,21 @@ func checkLocks(fix bool) []CheckResult {
 				continue
 			}
 
-			if info != nil && !profile.IsProcessAlive(info.PID) {
+			if info == nil {
+				// Lock file exists but couldn't parse it (corrupt or empty)
+				results = append(results, CheckResult{
+					Name:    fmt.Sprintf("%s/%s lock", provider, prof.Name),
+					Status:  "warn",
+					Message: "lock file exists but is empty or corrupt",
+					Details: "Run with --fix to remove",
+				})
+				if fix {
+					if err := prof.Unlock(); err == nil {
+						results[len(results)-1].Status = "fixed"
+						results[len(results)-1].Message = "removed corrupt lock file"
+					}
+				}
+			} else if !profile.IsProcessAlive(info.PID) {
 				// Stale lock
 				if fix {
 					if err := prof.Unlock(); err != nil {

@@ -48,13 +48,17 @@ Use 'caam which' to see current defaults.`,
 
 		// Also check isolated profiles
 		if !found {
-			isolatedProfiles, _ := profileStore.List(provider)
-			for _, p := range isolatedProfiles {
-				if p.Name == profileName {
-					found = true
-					break
+			isolatedProfiles, err := profileStore.List(provider)
+			if err == nil {
+				for _, p := range isolatedProfiles {
+					if p.Name == profileName {
+						found = true
+						break
+					}
 				}
 			}
+			// Note: we don't fail on error here - isolated profiles are optional
+			// If profileStore.List fails, we just won't find a match in isolated profiles
 		}
 
 		if !found {
