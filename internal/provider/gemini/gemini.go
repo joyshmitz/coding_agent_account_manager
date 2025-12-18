@@ -2,9 +2,9 @@
 //
 // Authentication mechanics (from research):
 // - Interactive mode presents three auth paths:
-//   1. Login with Google (recommended for AI Pro/Ultra) - browser OAuth via localhost redirect
-//   2. Gemini API key (GEMINI_API_KEY)
-//   3. Vertex AI (ADC / service account / Google API key)
+//  1. Login with Google (recommended for AI Pro/Ultra) - browser OAuth via localhost redirect
+//  2. Gemini API key (GEMINI_API_KEY)
+//  3. Vertex AI (ADC / service account / Google API key)
 //
 // - "Login with Google" opens browser and uses localhost redirect; credentials cached locally.
 // - Gemini CLI auto-loads env vars from first .env found searching upward, then ~/.gemini/.env.
@@ -58,8 +58,8 @@ func (p *Provider) DefaultBin() string {
 // SupportedAuthModes returns the authentication modes supported by Gemini.
 func (p *Provider) SupportedAuthModes() []provider.AuthMode {
 	return []provider.AuthMode{
-		provider.AuthModeOAuth,    // Login with Google (Gemini Ultra subscription)
-		provider.AuthModeAPIKey,   // Gemini API key
+		provider.AuthModeOAuth,     // Login with Google (Gemini Ultra subscription)
+		provider.AuthModeAPIKey,    // Gemini API key
 		provider.AuthModeVertexADC, // Vertex AI with Application Default Credentials
 	}
 }
@@ -167,7 +167,8 @@ func (p *Provider) loginWithOAuth(ctx context.Context, prof *profile.Profile) er
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
-	// If browser profile is configured, use it for the OAuth flow
+	// Set up URL detection and capture if browser profile is configured
+	var capture *browser.OutputCapture
 	if prof.HasBrowserConfig() {
 		launcher := browser.NewLauncher(&browser.Config{
 			Command:    prof.BrowserCommand,
@@ -175,8 +176,7 @@ func (p *Provider) loginWithOAuth(ctx context.Context, prof *profile.Profile) er
 		})
 		fmt.Printf("Using browser profile: %s\n", prof.BrowserDisplayName())
 
-		// Set up URL detection and capture
-		capture := browser.NewOutputCapture(os.Stdout, os.Stderr)
+		capture = browser.NewOutputCapture(os.Stdout, os.Stderr)
 		capture.OnURL = func(url, source string) {
 			// Open detected URLs with our configured browser
 			if err := launcher.Open(url); err != nil {
@@ -193,7 +193,11 @@ func (p *Provider) loginWithOAuth(ctx context.Context, prof *profile.Profile) er
 
 	cmd.Stdin = os.Stdin
 
-	return cmd.Run()
+	err = cmd.Run()
+	if capture != nil {
+		capture.Flush()
+	}
+	return err
 }
 
 // loginWithAPIKey guides user to set up GEMINI_API_KEY.
@@ -238,7 +242,8 @@ func (p *Provider) loginWithVertexADC(ctx context.Context, prof *profile.Profile
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
-	// If browser profile is configured, use it for the OAuth flow
+	// Set up URL detection and capture if browser profile is configured
+	var capture *browser.OutputCapture
 	if prof.HasBrowserConfig() {
 		launcher := browser.NewLauncher(&browser.Config{
 			Command:    prof.BrowserCommand,
@@ -246,8 +251,7 @@ func (p *Provider) loginWithVertexADC(ctx context.Context, prof *profile.Profile
 		})
 		fmt.Printf("Using browser profile: %s\n", prof.BrowserDisplayName())
 
-		// Set up URL detection and capture
-		capture := browser.NewOutputCapture(os.Stdout, os.Stderr)
+		capture = browser.NewOutputCapture(os.Stdout, os.Stderr)
 		capture.OnURL = func(url, source string) {
 			// Open detected URLs with our configured browser
 			if err := launcher.Open(url); err != nil {
@@ -264,7 +268,11 @@ func (p *Provider) loginWithVertexADC(ctx context.Context, prof *profile.Profile
 
 	cmd.Stdin = os.Stdin
 
-	if err := cmd.Run(); err != nil {
+	err = cmd.Run()
+	if capture != nil {
+		capture.Flush()
+	}
+	if err != nil {
 		return fmt.Errorf("gcloud auth: %w", err)
 	}
 

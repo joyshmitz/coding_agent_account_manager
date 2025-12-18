@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -136,7 +137,7 @@ func FormatStatusWithReason(status HealthStatus, health *ProfileHealth, opts For
 
 	var result string
 	if len(reasons) > 0 {
-		result = fmt.Sprintf("%s %s - %s", icon, strings.Title(statusStr), strings.Join(reasons, ", "))
+		result = fmt.Sprintf("%s %s - %s", icon, capitalizeFirst(statusStr), strings.Join(reasons, ", "))
 	} else {
 		switch status {
 		case StatusHealthy:
@@ -240,4 +241,16 @@ func formatDurationNatural(d time.Duration) string {
 		return "1 day"
 	}
 	return fmt.Sprintf("%d days", days)
+}
+
+// capitalizeFirst returns the string with its first letter capitalized.
+// This is a replacement for the deprecated strings.Title function.
+// Uses Unicode-aware rune handling for proper UTF-8 support.
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	runes := []rune(s)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
 }

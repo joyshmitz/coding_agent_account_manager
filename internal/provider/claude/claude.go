@@ -241,7 +241,8 @@ func (p *Provider) loginWithOAuth(ctx context.Context, prof *profile.Profile) er
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
-	// If browser profile is configured, use it for the OAuth flow
+	// Set up URL detection and capture if browser profile is configured
+	var capture *browser.OutputCapture
 	if prof.HasBrowserConfig() {
 		launcher := browser.NewLauncher(&browser.Config{
 			Command:    prof.BrowserCommand,
@@ -249,8 +250,7 @@ func (p *Provider) loginWithOAuth(ctx context.Context, prof *profile.Profile) er
 		})
 		fmt.Printf("Using browser profile: %s\n", prof.BrowserDisplayName())
 
-		// Set up URL detection and capture
-		capture := browser.NewOutputCapture(os.Stdout, os.Stderr)
+		capture = browser.NewOutputCapture(os.Stdout, os.Stderr)
 		capture.OnURL = func(url, source string) {
 			// Open detected URLs with our configured browser
 			if err := launcher.Open(url); err != nil {
@@ -267,7 +267,11 @@ func (p *Provider) loginWithOAuth(ctx context.Context, prof *profile.Profile) er
 
 	cmd.Stdin = os.Stdin
 
-	return cmd.Run()
+	err = cmd.Run()
+	if capture != nil {
+		capture.Flush()
+	}
+	return err
 }
 
 // loginWithAPIKey prompts for API key and stores it.

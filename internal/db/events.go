@@ -140,7 +140,7 @@ func (d *DB) GetEvents(provider, profile string, since time.Time, limit int) ([]
 		`SELECT timestamp, event_type, provider, profile_name, details, duration_seconds
 		 FROM activity_log
 		 WHERE provider = ? AND profile_name = ? AND datetime(timestamp) >= datetime(?)
-		 ORDER BY datetime(timestamp) DESC
+		 ORDER BY timestamp DESC
 		 LIMIT ?`,
 		provider,
 		profile,
@@ -241,6 +241,58 @@ func (d *DB) GetStats(provider, profile string) (*ProfileStats, error) {
 	return &stats, nil
 }
 
+// LastActivation returns the most recent activation timestamp for a provider/profile.
+// Returns zero time if no activation event exists.
+//
+// Prefer the aggregated profile_stats table, but fall back to querying activity_log
+// for robustness (e.g., older databases without backfilled stats).
+func (d *DB) LastActivation(provider, profile string) (time.Time, error) {
+	if d == nil || d.conn == nil {
+		return time.Time{}, fmt.Errorf("db is not open")
+	}
+
+	provider = strings.TrimSpace(provider)
+	profile = strings.TrimSpace(profile)
+	if provider == "" {
+		return time.Time{}, fmt.Errorf("provider is required")
+	}
+	if profile == "" {
+		return time.Time{}, fmt.Errorf("profile name is required")
+	}
+
+	stats, err := d.GetStats(provider, profile)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if stats != nil && !stats.LastActivated.IsZero() {
+		return stats.LastActivated, nil
+	}
+
+	var tsStr string
+	err = d.conn.QueryRow(
+		`SELECT timestamp
+		 FROM activity_log
+		 WHERE provider = ? AND profile_name = ? AND event_type = ?
+		 ORDER BY timestamp DESC
+		 LIMIT 1`,
+		provider,
+		profile,
+		EventActivate,
+	).Scan(&tsStr)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("query last activation: %w", err)
+	}
+
+	ts, err := parseSQLiteTime(tsStr)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse timestamp %q: %w", tsStr, err)
+	}
+	return ts, nil
+}
+
 func updateProfileStats(tx *sql.Tx, eventType, provider, profile, ts string, durationSeconds int64) error {
 	switch eventType {
 	case EventActivate:
@@ -249,7 +301,7 @@ func updateProfileStats(tx *sql.Tx, eventType, provider, profile, ts string, dur
 			 VALUES (?, ?, 1, ?)
 			 ON CONFLICT(provider, profile_name) DO UPDATE SET
 			   total_activations = total_activations + 1,
-			   last_activated = excluded.last_activated`,
+			   last_activated = MAX(last_activated, excluded.last_activated)`,
 			provider,
 			profile,
 			ts,

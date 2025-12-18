@@ -432,18 +432,11 @@ func (s *Selector) getLastActivation(tool, profile string) time.Time {
 		return time.Time{}
 	}
 
-	events, err := s.db.GetEvents(tool, profile, time.Time{}, 25)
+	ts, err := s.db.LastActivation(tool, profile)
 	if err != nil {
 		return time.Time{}
 	}
-
-	for _, ev := range events {
-		if ev.Type == caamdb.EventActivate && !ev.Timestamp.IsZero() {
-			return ev.Timestamp
-		}
-	}
-
-	return time.Time{}
+	return ts
 }
 
 // formatDuration returns a human-friendly duration string.

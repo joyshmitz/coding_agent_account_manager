@@ -83,7 +83,18 @@ func (c *Config) Save() error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, data, 0600)
+	// Atomic write: write to temp file then rename
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("write temp config file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp config file: %w", err)
+	}
+
+	return nil
 }
 
 // SetDefault sets the default profile for a provider.

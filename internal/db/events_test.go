@@ -126,3 +126,51 @@ func TestDB_LogEvent_Concurrent(t *testing.T) {
 		t.Fatalf("TotalActivations = %d, want %d", stats.TotalActivations, want)
 	}
 }
+
+func TestDB_LastActivation_UsesStatsAndFallsBackToActivityLog(t *testing.T) {
+	tmpDir := t.TempDir()
+	d, err := OpenAt(tmpDir + "/caam.db")
+	if err != nil {
+		t.Fatalf("OpenAt() error = %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	ts := time.Now().UTC().Truncate(time.Second).Add(-1 * time.Hour)
+	if err := d.LogEvent(Event{
+		Type:        EventActivate,
+		Provider:    "codex",
+		ProfileName: "work",
+		Timestamp:   ts,
+	}); err != nil {
+		t.Fatalf("LogEvent(activate) error = %v", err)
+	}
+
+	got, err := d.LastActivation("codex", "work")
+	if err != nil {
+		t.Fatalf("LastActivation(stats) error = %v", err)
+	}
+	if !got.Equal(ts) {
+		t.Fatalf("LastActivation(stats) = %s, want %s", got.Format(time.RFC3339Nano), ts.Format(time.RFC3339Nano))
+	}
+
+	// Remove stats row to force fallback behavior.
+	if _, err := d.Conn().Exec(`DELETE FROM profile_stats WHERE provider = ? AND profile_name = ?`, "codex", "work"); err != nil {
+		t.Fatalf("DELETE profile_stats error = %v", err)
+	}
+
+	got, err = d.LastActivation("codex", "work")
+	if err != nil {
+		t.Fatalf("LastActivation(fallback) error = %v", err)
+	}
+	if !got.Equal(ts) {
+		t.Fatalf("LastActivation(fallback) = %s, want %s", got.Format(time.RFC3339Nano), ts.Format(time.RFC3339Nano))
+	}
+
+	empty, err := d.LastActivation("codex", "nope")
+	if err != nil {
+		t.Fatalf("LastActivation(empty) error = %v", err)
+	}
+	if !empty.IsZero() {
+		t.Fatalf("LastActivation(empty) = %s, want zero", empty.Format(time.RFC3339Nano))
+	}
+}
