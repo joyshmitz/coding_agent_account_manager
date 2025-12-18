@@ -24,6 +24,11 @@ type projectContextLoadedMsg struct {
 	err      error
 }
 
+type usageStatsLoadedMsg struct {
+	stats []ProfileUsage
+	err   error
+}
+
 func eventTypeVerb(t watcher.EventType) string {
 	switch t {
 	case watcher.EventProfileAdded:

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
+	caamdb "github.com/Dicklesworthstone/coding_agent_account_manager/internal/db"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/project"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/watcher"
@@ -65,6 +66,7 @@ type Model struct {
 	providerPanel *ProviderPanel
 	profilesPanel *ProfilesPanel
 	detailPanel   *DetailPanel
+	usagePanel    *UsagePanel
 
 	// Status message
 	statusMsg string
@@ -112,6 +114,7 @@ func NewWithProviders(providers []string) Model {
 		providerPanel:  NewProviderPanel(providers),
 		profilesPanel:  profilesPanel,
 		detailPanel:    NewDetailPanel(),
+		usagePanel:     NewUsagePanel(),
 		vaultPath:      authfile.DefaultVaultPath(),
 		badges:         make(map[string]profileBadge),
 		cwd:            cwd,
@@ -164,6 +167,83 @@ func (m Model) watchProfiles() tea.Cmd {
 			return errMsg{err: err}
 		}
 	}
+}
+
+func (m Model) loadUsageStats() tea.Cmd {
+	if m.usagePanel == nil {
+		return nil
+	}
+
+	days := m.usagePanel.TimeRange()
+	since := time.Time{}
+	if days > 0 {
+		since = time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	}
+
+	return func() tea.Msg {
+		db, err := caamdb.Open()
+		if err != nil {
+			return usageStatsLoadedMsg{err: err}
+		}
+		defer db.Close()
+
+		stats, err := queryUsageStats(db, since)
+		if err != nil {
+			return usageStatsLoadedMsg{err: err}
+		}
+		return usageStatsLoadedMsg{stats: stats}
+	}
+}
+
+func queryUsageStats(db *caamdb.DB, since time.Time) ([]ProfileUsage, error) {
+	if db == nil || db.Conn() == nil {
+		return nil, fmt.Errorf("db not available")
+	}
+
+	rows, err := db.Conn().Query(
+		`SELECT provider,
+		        profile_name,
+		        SUM(CASE WHEN event_type = ? THEN 1 ELSE 0 END) AS sessions,
+		        SUM(CASE WHEN event_type = ? THEN COALESCE(duration_seconds, 0) ELSE 0 END) AS active_seconds
+		   FROM activity_log
+		  WHERE datetime(timestamp) >= datetime(?)
+		  GROUP BY provider, profile_name
+		  ORDER BY active_seconds DESC, sessions DESC, provider ASC, profile_name ASC`,
+		caamdb.EventActivate,
+		caamdb.EventDeactivate,
+		formatSQLiteSince(since),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query usage stats: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ProfileUsage
+	for rows.Next() {
+		var provider, profile string
+		var sessions int
+		var seconds int64
+		if err := rows.Scan(&provider, &profile, &sessions, &seconds); err != nil {
+			return nil, fmt.Errorf("scan usage stats: %w", err)
+		}
+		out = append(out, ProfileUsage{
+			Provider:     provider,
+			ProfileName:  profile,
+			SessionCount: sessions,
+			TotalHours:   float64(seconds) / 3600,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate usage stats: %w", err)
+	}
+	return out, nil
+}
+
+func formatSQLiteSince(t time.Time) string {
+	if t.IsZero() {
+		return "1970-01-01 00:00:00"
+	}
+	return t.UTC().Format("2006-01-02 15:04:05")
 }
 
 // loadProfiles loads profiles for all providers.
@@ -280,6 +360,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncProfilesPanel()
 		return m, nil
 
+	case usageStatsLoadedMsg:
+		if msg.err != nil {
+			m.statusMsg = msg.err.Error()
+			if m.usagePanel != nil {
+				m.usagePanel.SetLoading(false)
+			}
+			return m, nil
+		}
+		if m.usagePanel != nil {
+			m.usagePanel.SetStats(msg.stats)
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 
@@ -316,6 +409,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKeyPress processes keyboard input.
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Usage panel overlay gets first crack at keys.
+	if m.usagePanel != nil && m.usagePanel.Visible() {
+		if msg.Type == tea.KeyEscape {
+			m.usagePanel.Toggle()
+			return m, nil
+		}
+		switch msg.String() {
+		case "u":
+			m.usagePanel.Toggle()
+			return m, nil
+		case "1":
+			m.usagePanel.SetTimeRange(1)
+			m.usagePanel.SetLoading(true)
+			return m, m.loadUsageStats()
+		case "2":
+			m.usagePanel.SetTimeRange(7)
+			m.usagePanel.SetLoading(true)
+			return m, m.loadUsageStats()
+		case "3":
+			m.usagePanel.SetTimeRange(30)
+			m.usagePanel.SetLoading(true)
+			return m, m.loadUsageStats()
+		case "4":
+			m.usagePanel.SetTimeRange(0)
+			m.usagePanel.SetLoading(true)
+			return m, m.loadUsageStats()
+		}
+	}
+
 	// Handle state-specific key handling
 	switch m.state {
 	case stateConfirm:
@@ -406,6 +528,17 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Project):
 		return m.handleSetProjectAssociation()
+
+	case key.Matches(msg, m.keys.Usage):
+		if m.usagePanel == nil {
+			return m, nil
+		}
+		m.usagePanel.Toggle()
+		if m.usagePanel.Visible() {
+			m.usagePanel.SetLoading(true)
+			return m, m.loadUsageStats()
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -717,6 +850,11 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	if m.usagePanel != nil && m.usagePanel.Visible() {
+		m.usagePanel.SetSize(m.width, m.height)
+		return m.usagePanel.View()
+	}
+
 	switch m.state {
 	case stateHelp:
 		return m.helpView()
@@ -914,6 +1052,7 @@ Profile Actions
 
 Other Actions
   b       Backup current auth state
+  u       Toggle usage stats panel (1/2/3/4 ranges)
 
 General
   ?       Toggle help

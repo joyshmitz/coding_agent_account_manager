@@ -20,6 +20,7 @@ type keyMap struct {
 	Open    key.Binding
 	Search  key.Binding
 	Project key.Binding
+	Usage   key.Binding
 
 	// Confirmation
 	Confirm key.Binding
@@ -85,6 +86,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "set project association"),
 		),
+		Usage: key.NewBinding(
+			key.WithKeys("u"),
+			key.WithHelp("u", "usage stats"),
+		),
 		Confirm: key.NewBinding(
 			key.WithKeys("y", "enter"),
 			key.WithHelp("y/enter", "confirm"),
@@ -114,7 +119,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Enter, k.Backup, k.Delete, k.Edit},
-		{k.Login, k.Open, k.Search, k.Project},
+		{k.Login, k.Open, k.Search, k.Project, k.Usage},
 		{k.Help, k.Quit},
 	}
 }
