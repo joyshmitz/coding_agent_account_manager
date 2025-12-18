@@ -93,6 +93,9 @@ func openAndInit(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	// SQLite PRAGMAs are per-connection; keep a single shared connection.
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	// Ensure we don't leak file descriptors on init errors.
 	initErr := func() error {
