@@ -176,7 +176,7 @@ func TestAuthFiles(t *testing.T) {
 // =============================================================================
 
 func TestPrepareProfile(t *testing.T) {
-	t.Run("creates codex_home directory", func(t *testing.T) {
+	t.Run("creates directories", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		prof := &profile.Profile{
 			Name:     "test",
@@ -189,6 +189,7 @@ func TestPrepareProfile(t *testing.T) {
 			t.Fatalf("PrepareProfile() error = %v", err)
 		}
 
+		// Check codex_home
 		codexHomePath := prof.CodexHomePath()
 		info, err := os.Stat(codexHomePath)
 		if err != nil {
@@ -196,6 +197,16 @@ func TestPrepareProfile(t *testing.T) {
 		}
 		if !info.IsDir() {
 			t.Error("codex_home should be a directory")
+		}
+
+		// Check home (pseudo-home for passthroughs)
+		homePath := prof.HomePath()
+		info, err = os.Stat(homePath)
+		if err != nil {
+			t.Fatalf("home not created: %v", err)
+		}
+		if !info.IsDir() {
+			t.Error("home should be a directory")
 		}
 	})
 
@@ -243,7 +254,7 @@ func TestPrepareProfile(t *testing.T) {
 // =============================================================================
 
 func TestEnv(t *testing.T) {
-	t.Run("sets CODEX_HOME", func(t *testing.T) {
+	t.Run("sets env vars", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		prof := &profile.Profile{
 			Name:     "test",
@@ -257,30 +268,28 @@ func TestEnv(t *testing.T) {
 			t.Fatalf("Env() error = %v", err)
 		}
 
+		if len(env) != 2 {
+			t.Errorf("Env() returned %d vars, want 2", len(env))
+		}
+
+		// Check CODEX_HOME
 		codexHome, ok := env["CODEX_HOME"]
 		if !ok {
-			t.Fatal("CODEX_HOME not set in env")
+			t.Error("CODEX_HOME not set in env")
+		}
+		expectedCodexHome := prof.CodexHomePath()
+		if codexHome != expectedCodexHome {
+			t.Errorf("CODEX_HOME = %q, want %q", codexHome, expectedCodexHome)
 		}
 
-		expected := prof.CodexHomePath()
-		if codexHome != expected {
-			t.Errorf("CODEX_HOME = %q, want %q", codexHome, expected)
+		// Check HOME
+		home, ok := env["HOME"]
+		if !ok {
+			t.Error("HOME not set in env")
 		}
-	})
-
-	t.Run("returns only CODEX_HOME", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		prof := &profile.Profile{
-			Name:     "test",
-			Provider: "codex",
-			BasePath: tmpDir,
-		}
-
-		p := New()
-		env, _ := p.Env(context.Background(), prof)
-
-		if len(env) != 1 {
-			t.Errorf("Env() returned %d vars, want 1", len(env))
+		expectedHome := prof.HomePath()
+		if home != expectedHome {
+			t.Errorf("HOME = %q, want %q", home, expectedHome)
 		}
 	})
 }

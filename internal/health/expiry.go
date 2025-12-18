@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -135,7 +136,9 @@ func ParseCodexExpiry(authPath string) (*ExpiryInfo, error) {
 // Note: Google OAuth tokens via ADC may not include expiry in the file itself.
 // The expiry is typically short-lived and requires refresh.
 func ParseGeminiExpiry(authDir string) (*ExpiryInfo, error) {
+	checkSystem := false
 	if authDir == "" {
+		checkSystem = true
 		geminiHome := os.Getenv("GEMINI_HOME")
 		if geminiHome == "" {
 			homeDir, _ := os.UserHomeDir()
@@ -160,12 +163,14 @@ func ParseGeminiExpiry(authDir string) (*ExpiryInfo, error) {
 		return info, nil
 	}
 
-	// Try gcloud ADC format
-	adcPath := filepath.Join(os.Getenv("HOME"), ".config", "gcloud", "application_default_credentials.json")
-	info, err = parseADCFile(adcPath)
-	if err == nil {
-		info.Source = adcPath
-		return info, nil
+	// Try gcloud ADC format (only if checking system state)
+	if checkSystem {
+		adcPath := getADCPath()
+		info, err = parseADCFile(adcPath)
+		if err == nil {
+			info.Source = adcPath
+			return info, nil
+		}
 	}
 
 	// Check if settings.json exists
@@ -174,6 +179,26 @@ func ParseGeminiExpiry(authDir string) (*ExpiryInfo, error) {
 	}
 
 	return nil, ErrNoExpiry
+}
+
+func getADCPath() string {
+	if path := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); path != "" {
+		return path
+	}
+
+	if configDir := os.Getenv("CLOUDSDK_CONFIG"); configDir != "" {
+		return filepath.Join(configDir, "application_default_credentials.json")
+	}
+
+	// Windows support
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "gcloud", "application_default_credentials.json")
+		}
+	}
+
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "gcloud", "application_default_credentials.json")
 }
 
 // oauthJSON represents common OAuth token response structures.

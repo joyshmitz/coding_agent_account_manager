@@ -93,6 +93,22 @@ func (p *Provider) PrepareProfile(ctx context.Context, prof *profile.Profile) er
 		return fmt.Errorf("create codex_home: %w", err)
 	}
 
+	// Create pseudo-home directory
+	homePath := prof.HomePath()
+	if err := os.MkdirAll(homePath, 0700); err != nil {
+		return fmt.Errorf("create home: %w", err)
+	}
+
+	// Set up passthrough symlinks
+	mgr, err := passthrough.NewManager()
+	if err != nil {
+		return fmt.Errorf("create passthrough manager: %w", err)
+	}
+
+	if err := mgr.SetupPassthroughs(prof, homePath); err != nil {
+		return fmt.Errorf("setup passthroughs: %w", err)
+	}
+
 	return nil
 }
 
@@ -100,6 +116,7 @@ func (p *Provider) PrepareProfile(ctx context.Context, prof *profile.Profile) er
 func (p *Provider) Env(ctx context.Context, prof *profile.Profile) (map[string]string, error) {
 	env := map[string]string{
 		"CODEX_HOME": prof.CodexHomePath(),
+		"HOME":       prof.HomePath(),
 	}
 	return env, nil
 }
