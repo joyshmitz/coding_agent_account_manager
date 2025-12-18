@@ -222,8 +222,11 @@ carol@gmail.com
 | `caam cooldown list` | List active cooldowns |
 | `caam cooldown clear <provider/profile>` | Clear cooldowns for a specific profile |
 | `caam cooldown clear --all` | Clear all cooldowns |
+| `caam activate <tool> --auto` | Auto-select a profile using the configured rotation algorithm |
 
 When `stealth.cooldown.enabled` is true, `caam activate` warns (and can block) if the target profile is still in cooldown. Use `caam activate <tool> <profile> --force` to override.
+
+When `stealth.rotation.enabled` is true, `caam activate <tool>` can fall back to rotation if there’s no default profile, and it will try to pick an alternative profile if the default is in cooldown.
 
 ### Profile Isolation (Advanced)
 
