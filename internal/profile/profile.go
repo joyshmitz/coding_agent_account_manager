@@ -10,6 +10,7 @@ package profile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -200,7 +201,17 @@ func IsProcessAlive(pid int) bool {
 
 	// On Unix, Signal(0) checks if the process exists without actually sending a signal
 	err = process.Signal(syscall.Signal(0))
-	return err == nil
+	if err == nil {
+		return true
+	}
+
+	// If we get EPERM, the process exists but we can't signal it (it's alive).
+	// Only ESRCH means it doesn't exist.
+	if errors.Is(err, syscall.EPERM) {
+		return true
+	}
+
+	return false
 }
 
 // IsLockStale checks if the lock file is from a dead process.
@@ -271,7 +282,18 @@ func (p *Profile) Save() error {
 		return fmt.Errorf("create profile dir: %w", err)
 	}
 
-	return os.WriteFile(p.MetaPath(), data, 0600)
+	// Atomic write: write to temp file then rename
+	tmpPath := p.MetaPath() + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("write temp profile file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, p.MetaPath()); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp profile file: %w", err)
+	}
+
+	return nil
 }
 
 // UpdateLastUsed updates the last used timestamp and saves.

@@ -276,6 +276,12 @@ func normalizeKey(path string) (string, error) {
 	}
 
 	cleaned := filepath.Clean(path)
+
+	// If it's a glob pattern, preserve it as-is (don't absolutize)
+	if isGlob(cleaned) {
+		return cleaned, nil
+	}
+
 	abs, err := filepath.Abs(cleaned)
 	if err != nil {
 		return "", fmt.Errorf("absolute path: %w", err)

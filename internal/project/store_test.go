@@ -272,3 +272,37 @@ func TestStore_NormalizesExistingStoredData(t *testing.T) {
 		t.Fatalf("expected unnormalized default key to be removed")
 	}
 }
+
+func TestGlobNormalization(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "projects.json")
+	store := NewStore(storePath)
+
+	// Intention: Allow any directory named "frontend" anywhere to use "work" profile
+	// Pattern: */frontend
+	err := store.SetAssociation("*/frontend", "claude", "work")
+	if err != nil {
+		t.Fatalf("SetAssociation failed: %v", err)
+	}
+
+	data, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// We expect one key
+	if len(data.Associations) != 1 {
+		t.Fatalf("expected 1 association, got %d", len(data.Associations))
+	}
+
+	// Extract the key
+	var key string
+	for k := range data.Associations {
+		key = k
+	}
+
+	// Check if the key was absolutized
+	if filepath.IsAbs(key) {
+		t.Errorf("expected relative glob key '*/frontend', got absolute path '%s'", key)
+	}
+}
