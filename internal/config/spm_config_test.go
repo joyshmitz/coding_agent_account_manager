@@ -67,6 +67,37 @@ func TestDefaultSPMConfig(t *testing.T) {
 	if cfg.Project.AutoActivate {
 		t.Error("Project.AutoActivate should be false by default")
 	}
+
+	// Check stealth defaults - all features disabled by default (opt-in)
+	if cfg.Stealth.SwitchDelay.Enabled {
+		t.Error("Stealth.SwitchDelay.Enabled should be false by default")
+	}
+	if cfg.Stealth.SwitchDelay.MinSeconds != 5 {
+		t.Errorf("Stealth.SwitchDelay.MinSeconds = %d, want 5", cfg.Stealth.SwitchDelay.MinSeconds)
+	}
+	if cfg.Stealth.SwitchDelay.MaxSeconds != 30 {
+		t.Errorf("Stealth.SwitchDelay.MaxSeconds = %d, want 30", cfg.Stealth.SwitchDelay.MaxSeconds)
+	}
+	if !cfg.Stealth.SwitchDelay.ShowCountdown {
+		t.Error("Stealth.SwitchDelay.ShowCountdown should be true by default")
+	}
+
+	if cfg.Stealth.Cooldown.Enabled {
+		t.Error("Stealth.Cooldown.Enabled should be false by default")
+	}
+	if cfg.Stealth.Cooldown.DefaultMinutes != 60 {
+		t.Errorf("Stealth.Cooldown.DefaultMinutes = %d, want 60", cfg.Stealth.Cooldown.DefaultMinutes)
+	}
+	if !cfg.Stealth.Cooldown.TrackLimitHits {
+		t.Error("Stealth.Cooldown.TrackLimitHits should be true by default")
+	}
+
+	if cfg.Stealth.Rotation.Enabled {
+		t.Error("Stealth.Rotation.Enabled should be false by default")
+	}
+	if cfg.Stealth.Rotation.Algorithm != "smart" {
+		t.Errorf("Stealth.Rotation.Algorithm = %q, want %q", cfg.Stealth.Rotation.Algorithm, "smart")
+	}
 }
 
 func TestSPMConfigPath(t *testing.T) {
@@ -304,6 +335,82 @@ analytics:
 			yaml: `version: 0`,
 			wantErr: "version must be >= 1",
 		},
+		{
+			name: "negative switch delay min",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+stealth:
+  switch_delay:
+    min_seconds: -5
+`,
+			wantErr: "stealth.switch_delay.min_seconds cannot be negative",
+		},
+		{
+			name: "negative switch delay max",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+stealth:
+  switch_delay:
+    max_seconds: -10
+`,
+			wantErr: "stealth.switch_delay.max_seconds cannot be negative",
+		},
+		{
+			name: "min > max switch delay",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+stealth:
+  switch_delay:
+    min_seconds: 60
+    max_seconds: 30
+`,
+			wantErr: "stealth.switch_delay.min_seconds cannot be greater than max_seconds",
+		},
+		{
+			name: "negative cooldown minutes",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+stealth:
+  cooldown:
+    default_minutes: -30
+`,
+			wantErr: "stealth.cooldown.default_minutes cannot be negative",
+		},
+		{
+			name: "invalid rotation algorithm",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+stealth:
+  rotation:
+    algorithm: invalid_algo
+`,
+			wantErr: "stealth.rotation.algorithm must be one of: smart, round_robin, random",
+		},
 	}
 
 	for _, tc := range tests {
@@ -354,6 +461,23 @@ func TestSPMConfigSave(t *testing.T) {
 			Enabled:      true,
 			AutoActivate: true,
 		},
+		Stealth: StealthConfig{
+			SwitchDelay: SwitchDelayConfig{
+				Enabled:       true,
+				MinSeconds:    10,
+				MaxSeconds:    60,
+				ShowCountdown: false,
+			},
+			Cooldown: CooldownConfig{
+				Enabled:        true,
+				DefaultMinutes: 120,
+				TrackLimitHits: false,
+			},
+			Rotation: RotationConfig{
+				Enabled:   true,
+				Algorithm: "round_robin",
+			},
+		},
 	}
 
 	// Save config
@@ -394,6 +518,35 @@ func TestSPMConfigSave(t *testing.T) {
 	}
 	if loaded.Project.AutoActivate != true {
 		t.Error("Loaded AutoActivate should be true")
+	}
+
+	// Verify stealth config was saved and loaded correctly
+	if !loaded.Stealth.SwitchDelay.Enabled {
+		t.Error("Loaded Stealth.SwitchDelay.Enabled should be true")
+	}
+	if loaded.Stealth.SwitchDelay.MinSeconds != 10 {
+		t.Errorf("Loaded Stealth.SwitchDelay.MinSeconds = %d, want 10", loaded.Stealth.SwitchDelay.MinSeconds)
+	}
+	if loaded.Stealth.SwitchDelay.MaxSeconds != 60 {
+		t.Errorf("Loaded Stealth.SwitchDelay.MaxSeconds = %d, want 60", loaded.Stealth.SwitchDelay.MaxSeconds)
+	}
+	if loaded.Stealth.SwitchDelay.ShowCountdown {
+		t.Error("Loaded Stealth.SwitchDelay.ShowCountdown should be false")
+	}
+	if !loaded.Stealth.Cooldown.Enabled {
+		t.Error("Loaded Stealth.Cooldown.Enabled should be true")
+	}
+	if loaded.Stealth.Cooldown.DefaultMinutes != 120 {
+		t.Errorf("Loaded Stealth.Cooldown.DefaultMinutes = %d, want 120", loaded.Stealth.Cooldown.DefaultMinutes)
+	}
+	if loaded.Stealth.Cooldown.TrackLimitHits {
+		t.Error("Loaded Stealth.Cooldown.TrackLimitHits should be false")
+	}
+	if !loaded.Stealth.Rotation.Enabled {
+		t.Error("Loaded Stealth.Rotation.Enabled should be true")
+	}
+	if loaded.Stealth.Rotation.Algorithm != "round_robin" {
+		t.Errorf("Loaded Stealth.Rotation.Algorithm = %q, want %q", loaded.Stealth.Rotation.Algorithm, "round_robin")
 	}
 }
 

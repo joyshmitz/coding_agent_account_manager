@@ -152,25 +152,46 @@ type captureWriter struct {
 	capture *OutputCapture
 	output  io.Writer
 	source  string
+	buffer  []byte
+	mu      sync.Mutex
 }
 
 func (w *captureWriter) Write(p []byte) (n int, err error) {
-	// Scan for URLs
-	urls := URLPattern.FindAllString(string(p), -1)
-	for _, url := range urls {
-		w.capture.mu.Lock()
-		w.capture.DetectedURLs = append(w.capture.DetectedURLs, DetectedURL{
-			URL:    url,
-			Source: w.source,
-		})
-		if w.capture.OnURL != nil {
-			w.capture.OnURL(url, w.source)
+	// Pass through to output first
+	n, err = w.output.Write(p)
+	if n > 0 {
+		w.mu.Lock()
+		w.buffer = append(w.buffer, p[:n]...)
+
+		for {
+			idx := bytes.IndexByte(w.buffer, '\n')
+			if idx < 0 {
+				break
+			}
+
+			line := w.buffer[:idx+1] // Include newline
+			lineStr := string(line)
+
+			// Scan for URLs in this line
+			urls := URLPattern.FindAllString(lineStr, -1)
+			for _, url := range urls {
+				w.capture.mu.Lock()
+				w.capture.DetectedURLs = append(w.capture.DetectedURLs, DetectedURL{
+					URL:    url,
+					Source: w.source,
+				})
+				if w.capture.OnURL != nil {
+					w.capture.OnURL(url, w.source)
+				}
+				w.capture.mu.Unlock()
+			}
+
+			w.buffer = w.buffer[idx+1:]
 		}
-		w.capture.mu.Unlock()
+		w.mu.Unlock()
 	}
 
-	// Pass through to output
-	return w.output.Write(p)
+	return n, err
 }
 
 // GetURLs returns all detected URLs (thread-safe).

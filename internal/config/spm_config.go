@@ -18,6 +18,7 @@ type SPMConfig struct {
 	Analytics AnalyticsConfig `yaml:"analytics"`
 	Runtime   RuntimeConfig   `yaml:"runtime"`
 	Project   ProjectConfig   `yaml:"project"`
+	Stealth   StealthConfig   `yaml:"stealth"`
 }
 
 // HealthConfig contains health and refresh settings.
@@ -47,6 +48,38 @@ type RuntimeConfig struct {
 type ProjectConfig struct {
 	Enabled      bool `yaml:"enabled"`       // Enable project associations
 	AutoActivate bool `yaml:"auto_activate"` // Auto-activate based on CWD
+}
+
+// StealthConfig contains detection mitigation settings.
+// All features are opt-in (disabled by default) for power users who want speed.
+type StealthConfig struct {
+	SwitchDelay SwitchDelayConfig `yaml:"switch_delay"`
+	Cooldown    CooldownConfig    `yaml:"cooldown"`
+	Rotation    RotationConfig    `yaml:"rotation"`
+}
+
+// SwitchDelayConfig controls delays before profile switches complete.
+// Adds random wait time to make switching look less automated.
+type SwitchDelayConfig struct {
+	Enabled       bool `yaml:"enabled"`        // Master switch for delay feature
+	MinSeconds    int  `yaml:"min_seconds"`    // Minimum delay before switch
+	MaxSeconds    int  `yaml:"max_seconds"`    // Maximum delay (random between min-max)
+	ShowCountdown bool `yaml:"show_countdown"` // Display countdown during delay
+}
+
+// CooldownConfig controls waiting periods after accounts hit rate limits.
+// Prevents suspicious pattern of immediate reuse after limit hits.
+type CooldownConfig struct {
+	Enabled        bool `yaml:"enabled"`          // Master switch for cooldown feature
+	DefaultMinutes int  `yaml:"default_minutes"`  // Default cooldown duration
+	TrackLimitHits bool `yaml:"track_limit_hits"` // Auto-track when limits are detected
+}
+
+// RotationConfig controls smart profile selection algorithms.
+// Varies which accounts are used and when to reduce predictable patterns.
+type RotationConfig struct {
+	Enabled   bool   `yaml:"enabled"`   // Master switch for rotation feature
+	Algorithm string `yaml:"algorithm"` // "smart" | "round_robin" | "random"
 }
 
 // Duration is a time.Duration that supports YAML marshaling/unmarshaling
@@ -112,6 +145,23 @@ func DefaultSPMConfig() *SPMConfig {
 		Project: ProjectConfig{
 			Enabled:      true,
 			AutoActivate: false, // Disabled by default - explicit is better
+		},
+		Stealth: StealthConfig{
+			SwitchDelay: SwitchDelayConfig{
+				Enabled:       false, // Opt-in - power users want speed
+				MinSeconds:    5,
+				MaxSeconds:    30,
+				ShowCountdown: true,
+			},
+			Cooldown: CooldownConfig{
+				Enabled:        false, // Opt-in
+				DefaultMinutes: 60,
+				TrackLimitHits: true,
+			},
+			Rotation: RotationConfig{
+				Enabled:   false, // Opt-in
+				Algorithm: "smart",
+			},
 		},
 	}
 }
@@ -220,6 +270,24 @@ func (c *SPMConfig) Validate() error {
 	}
 	if c.Analytics.AggregateRetentionDays < c.Analytics.RetentionDays {
 		return fmt.Errorf("analytics.aggregate_retention_days should be >= retention_days")
+	}
+
+	// Stealth validation
+	if c.Stealth.SwitchDelay.MinSeconds < 0 {
+		return fmt.Errorf("stealth.switch_delay.min_seconds cannot be negative")
+	}
+	if c.Stealth.SwitchDelay.MaxSeconds < 0 {
+		return fmt.Errorf("stealth.switch_delay.max_seconds cannot be negative")
+	}
+	if c.Stealth.SwitchDelay.MinSeconds > c.Stealth.SwitchDelay.MaxSeconds {
+		return fmt.Errorf("stealth.switch_delay.min_seconds cannot be greater than max_seconds")
+	}
+	if c.Stealth.Cooldown.DefaultMinutes < 0 {
+		return fmt.Errorf("stealth.cooldown.default_minutes cannot be negative")
+	}
+	validAlgorithms := map[string]bool{"smart": true, "round_robin": true, "random": true}
+	if c.Stealth.Rotation.Algorithm != "" && !validAlgorithms[c.Stealth.Rotation.Algorithm] {
+		return fmt.Errorf("stealth.rotation.algorithm must be one of: smart, round_robin, random")
 	}
 
 	return nil
