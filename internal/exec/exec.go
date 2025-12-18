@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,12 +67,30 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) error {
 	bin := opts.Provider.DefaultBin()
 	cmd := exec.CommandContext(ctx, bin, opts.Args...)
 
-	// Set up environment
-	cmd.Env = os.Environ()
-	for k, v := range providerEnv {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	// Set up environment with deduplication (last one wins in our map logic)
+	envMap := make(map[string]string)
+	
+	// 1. Start with inherited environment
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
 	}
+
+	// 2. Apply provider environment (overrides inherited)
+	for k, v := range providerEnv {
+		envMap[k] = v
+	}
+
+	// 3. Apply custom environment options (overrides provider)
 	for k, v := range opts.Env {
+		envMap[k] = v
+	}
+
+	// Reassemble into slice
+	cmd.Env = make([]string, 0, len(envMap))
+	for k, v := range envMap {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 

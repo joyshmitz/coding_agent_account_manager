@@ -603,6 +603,12 @@ func copyFile(src, dst string) error {
 		return err
 	}
 
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+
 	if err := dstFile.Close(); err != nil {
 		os.Remove(tmpPath)
 		return err

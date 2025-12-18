@@ -100,8 +100,26 @@ func UpdateCodexAuth(path string, resp *TokenResponse) error {
 	}
 
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, updatedData, 0600); err != nil {
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := f.Write(updatedData); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
