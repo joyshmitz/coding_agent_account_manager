@@ -3,6 +3,10 @@
 ## Active Agents
 - **Gemini**: Fixed health store wiring in `getProfileHealth` and committed Proactive Token Refresh feature (`caam-e36` completion).
 - **Codex (GPT-5.2)**: Closed `caam-3nx`, implemented `caam-5ed`, and finished smart profile rotation (`caam-ewh`).
+- **LilacCastle (Claude Opus 4.5)**: Bug fixes in rotation/activate code; closed stealth epic `caam-e8o`.
+
+## Project Status
+✅ **All 98 beads closed** - Project feature complete!
 
 ## Task Queue
 - [x] Investigate codebase
