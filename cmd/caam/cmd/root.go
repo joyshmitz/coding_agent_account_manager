@@ -889,7 +889,8 @@ so the auth credentials are stored in the profile's directory.
 
 Examples:
   caam login codex work     # Login to work profile
-  caam login claude home    # Login to home profile`,
+  caam login claude home    # Login to home profile
+  caam login codex work --device-code  # Device code flow (if supported)`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tool := strings.ToLower(args[0])
@@ -906,13 +907,28 @@ Examples:
 		}
 
 		ctx := context.Background()
-		if err := prov.Login(ctx, prof); err != nil {
-			return fmt.Errorf("login failed: %w", err)
+		deviceCode, _ := cmd.Flags().GetBool("device-code")
+		if deviceCode {
+			deviceCodeProv, ok := prov.(provider.DeviceCodeProvider)
+			if !ok || !deviceCodeProv.SupportsDeviceCode() {
+				return fmt.Errorf("%s does not support --device-code", tool)
+			}
+			if err := deviceCodeProv.LoginWithDeviceCode(ctx, prof); err != nil {
+				return fmt.Errorf("device-code login failed: %w", err)
+			}
+		} else {
+			if err := prov.Login(ctx, prof); err != nil {
+				return fmt.Errorf("login failed: %w", err)
+			}
 		}
 
 		fmt.Printf("\nLogin complete for %s/%s\n", tool, name)
 		return nil
 	},
+}
+
+func init() {
+	loginCmd.Flags().Bool("device-code", false, "use device code flow (if supported)")
 }
 
 // execCmd runs the CLI with an isolated profile.

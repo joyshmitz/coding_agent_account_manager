@@ -55,15 +55,19 @@ func TestSupportedAuthModes(t *testing.T) {
 	p := New()
 	modes := p.SupportedAuthModes()
 
-	if len(modes) != 2 {
-		t.Fatalf("SupportedAuthModes() returned %d modes, want 2", len(modes))
+	if len(modes) != 3 {
+		t.Fatalf("SupportedAuthModes() returned %d modes, want 3", len(modes))
 	}
 
 	hasOAuth := false
+	hasDeviceCode := false
 	hasAPIKey := false
 	for _, mode := range modes {
 		if mode == provider.AuthModeOAuth {
 			hasOAuth = true
+		}
+		if mode == provider.AuthModeDeviceCode {
+			hasDeviceCode = true
 		}
 		if mode == provider.AuthModeAPIKey {
 			hasAPIKey = true
@@ -72,6 +76,9 @@ func TestSupportedAuthModes(t *testing.T) {
 
 	if !hasOAuth {
 		t.Error("SupportedAuthModes() should include OAuth")
+	}
+	if !hasDeviceCode {
+		t.Error("SupportedAuthModes() should include DeviceCode")
 	}
 	if !hasAPIKey {
 		t.Error("SupportedAuthModes() should include APIKey")

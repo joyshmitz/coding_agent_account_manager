@@ -338,6 +338,11 @@ func TestLoginCommandArgs(t *testing.T) {
 		t.Errorf("Unexpected Use: %q", loginCmd.Use)
 	}
 
+	flag := loginCmd.Flags().Lookup("device-code")
+	if flag == nil {
+		t.Error("Expected --device-code flag")
+	}
+
 	err := loginCmd.Args(loginCmd, []string{"codex", "work"})
 	if err != nil {
 		t.Errorf("Expected no error for 2 args, got %v", err)

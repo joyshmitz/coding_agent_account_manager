@@ -57,8 +57,9 @@ func (p *Provider) DefaultBin() string {
 // SupportedAuthModes returns the authentication modes supported by Codex.
 func (p *Provider) SupportedAuthModes() []provider.AuthMode {
 	return []provider.AuthMode{
-		provider.AuthModeOAuth,  // Browser-based ChatGPT login (GPT Pro subscription)
-		provider.AuthModeAPIKey, // OpenAI API key
+		provider.AuthModeOAuth,      // Browser-based ChatGPT login (GPT Pro subscription)
+		provider.AuthModeDeviceCode, // Device code flow (codex login --device-auth)
+		provider.AuthModeAPIKey,     // OpenAI API key
 	}
 }
 
@@ -105,11 +106,32 @@ func (p *Provider) Env(ctx context.Context, prof *profile.Profile) (map[string]s
 // Login initiates the authentication flow.
 func (p *Provider) Login(ctx context.Context, prof *profile.Profile) error {
 	switch provider.AuthMode(prof.AuthMode) {
+	case provider.AuthModeDeviceCode:
+		return p.LoginWithDeviceCode(ctx, prof)
 	case provider.AuthModeAPIKey:
 		return p.loginWithAPIKey(ctx, prof)
 	default:
 		return p.loginWithOAuth(ctx, prof)
 	}
+}
+
+func (p *Provider) SupportsDeviceCode() bool {
+	return true
+}
+
+func (p *Provider) LoginWithDeviceCode(ctx context.Context, prof *profile.Profile) error {
+	codexHomePath := prof.CodexHomePath()
+
+	cmd := exec.CommandContext(ctx, "codex", "login", "--device-auth")
+	cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHomePath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	fmt.Println("Starting Codex device code login flow...")
+	fmt.Println("Follow the prompts to authenticate in your browser.")
+
+	return cmd.Run()
 }
 
 // loginWithOAuth runs the browser-based login flow.
@@ -241,3 +263,4 @@ func (p *Provider) ValidateProfile(ctx context.Context, prof *profile.Profile) e
 
 // Ensure Provider implements the interface.
 var _ provider.Provider = (*Provider)(nil)
+var _ provider.DeviceCodeProvider = (*Provider)(nil)
