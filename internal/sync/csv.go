@@ -56,9 +56,33 @@ func EnsureCSVFile() (bool, error) {
 		return false, fmt.Errorf("create directory: %w", err)
 	}
 
-	// Create file with template
-	if err := os.WriteFile(path, []byte(csvTemplate), 0600); err != nil {
-		return false, fmt.Errorf("write file: %w", err)
+	// Create file with template using atomic write pattern
+	tmpPath := path + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return false, fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := f.WriteString(csvTemplate); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("rename temp file: %w", err)
 	}
 
 	return true, nil
@@ -194,12 +218,30 @@ func SaveToCSV(machines []*Machine) error {
 		lines = append(lines, fmt.Sprintf("%s,%s,%s", m.Name, address, keyPath))
 	}
 
-	// Write file atomically
+	// Write file atomically: open, write, fsync, close, rename
 	tmpPath := path + ".tmp"
 	content := strings.Join(lines, "\n") + "\n"
 
-	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {

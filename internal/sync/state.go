@@ -182,12 +182,7 @@ func (s *SyncState) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Ensure pool has our machine ID
-	if s.Pool != nil && s.Identity != nil {
-		s.Pool.LocalMachineID = s.Identity.ID
-	}
-
-	// Save pool
+	// Save pool (LocalMachineID is set during Load, not here to avoid races)
 	if s.Pool != nil {
 		if err := s.Pool.Save(); err != nil {
 			return fmt.Errorf("save pool: %w", err)
