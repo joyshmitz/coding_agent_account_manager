@@ -1,6 +1,8 @@
 # Binaries
 accx
 accx.exe
+caam
+caam.exe
 *.exe
 *.exe~
 *.dll
