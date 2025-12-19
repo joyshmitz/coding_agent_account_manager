@@ -31,6 +31,9 @@ const (
 	stateHelp
 	stateBackupDialog
 	stateConfirmOverwrite
+	stateExportConfirm
+	stateImportPath
+	stateImportConfirm
 )
 
 // confirmAction represents the action being confirmed.
@@ -71,6 +74,7 @@ type Model struct {
 	profilesPanel *ProfilesPanel
 	detailPanel   *DetailPanel
 	usagePanel    *UsagePanel
+	syncPanel     *SyncPanel
 
 	// Status message
 	statusMsg string
@@ -131,6 +135,7 @@ func NewWithProviders(providers []string) Model {
 		profilesPanel:  profilesPanel,
 		detailPanel:    NewDetailPanel(),
 		usagePanel:     NewUsagePanel(),
+		syncPanel:      NewSyncPanel(),
 		vaultPath:      authfile.DefaultVaultPath(),
 		badges:         make(map[string]profileBadge),
 		runtime:        defaultRuntime,
@@ -451,6 +456,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case syncStateLoadedMsg:
+		if msg.err != nil {
+			m.statusMsg = "Failed to load sync state: " + msg.err.Error()
+			if m.syncPanel != nil {
+				m.syncPanel.SetLoading(false)
+			}
+			return m, nil
+		}
+		if m.syncPanel != nil {
+			m.syncPanel.SetState(msg.state)
+		}
+		return m, nil
+
+	case syncMachineAddedMsg:
+		if msg.err != nil {
+			m.statusMsg = "Failed to add machine: " + msg.err.Error()
+		} else {
+			m.statusMsg = "Machine added: " + msg.machine.Name
+		}
+		return m, m.loadSyncState()
+
+	case syncMachineRemovedMsg:
+		if msg.err != nil {
+			m.statusMsg = "Failed to remove machine: " + msg.err.Error()
+		} else {
+			m.statusMsg = "Machine removed"
+		}
+		return m, m.loadSyncState()
+
+	case syncTestResultMsg:
+		if msg.err != nil {
+			m.statusMsg = "Connection test failed: " + msg.err.Error()
+		} else if msg.success {
+			m.statusMsg = "Connection test: " + msg.message
+		} else {
+			m.statusMsg = "Connection test failed: " + msg.message
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 
@@ -480,6 +524,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.watchProfiles()
 		}
 		return m, nil
+
+	case exportCompleteMsg:
+		return m.handleExportComplete(msg)
+
+	case exportErrorMsg:
+		return m.handleExportError(msg)
+
+	case importPreviewMsg:
+		return m.handleImportPreview(msg)
+
+	case importCompleteMsg:
+		return m.handleImportComplete(msg)
+
+	case importErrorMsg:
+		return m.handleImportError(msg)
 	}
 
 	return m, nil
@@ -516,6 +575,11 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Sync panel overlay gets keys when visible.
+	if m.syncPanel != nil && m.syncPanel.Visible() {
+		return m.handleSyncPanelKeys(msg)
+	}
+
 	// Handle state-specific key handling
 	switch m.state {
 	case stateConfirm:
@@ -530,6 +594,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBackupDialogKeys(msg)
 	case stateConfirmOverwrite:
 		return m.handleConfirmOverwriteKeys(msg)
+	case stateExportConfirm:
+		return m.handleExportConfirmKeys(msg)
+	case stateImportPath:
+		return m.handleImportPathKeys(msg)
+	case stateImportConfirm:
+		return m.handleImportConfirmKeys(msg)
 	}
 
 	// Normal list view key handling
@@ -621,6 +691,23 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.loadUsageStats()
 		}
 		return m, nil
+
+	case key.Matches(msg, m.keys.Sync):
+		if m.syncPanel == nil {
+			return m, nil
+		}
+		m.syncPanel.Toggle()
+		if m.syncPanel.Visible() {
+			m.syncPanel.SetLoading(true)
+			return m, m.loadSyncState()
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.Export):
+		return m.handleExportVault()
+
+	case key.Matches(msg, m.keys.Import):
+		return m.handleImportBundle()
 	}
 
 	return m, nil
@@ -1114,6 +1201,21 @@ func (m Model) View() string {
 		return m.dialogOverlayView(m.backupDialog.View())
 	case stateConfirmOverwrite:
 		return m.dialogOverlayView(m.confirmDialog.View())
+	case stateExportConfirm:
+		if m.confirmDialog != nil {
+			return m.dialogOverlayView(m.confirmDialog.View())
+		}
+		return m.mainView()
+	case stateImportPath:
+		if m.backupDialog != nil {
+			return m.dialogOverlayView(m.backupDialog.View())
+		}
+		return m.mainView()
+	case stateImportConfirm:
+		if m.confirmDialog != nil {
+			return m.dialogOverlayView(m.confirmDialog.View())
+		}
+		return m.mainView()
 	default:
 		return m.mainView()
 	}

@@ -21,6 +21,9 @@ type keyMap struct {
 	Search  key.Binding
 	Project key.Binding
 	Usage   key.Binding
+	Sync    key.Binding
+	Export  key.Binding
+	Import  key.Binding
 
 	// Confirmation
 	Confirm key.Binding
@@ -90,6 +93,18 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("u"),
 			key.WithHelp("u", "usage stats"),
 		),
+		Sync: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("S", "sync pool"),
+		),
+		Export: key.NewBinding(
+			key.WithKeys("E"),
+			key.WithHelp("E", "export vault"),
+		),
+		Import: key.NewBinding(
+			key.WithKeys("I"),
+			key.WithHelp("I", "import bundle"),
+		),
 		Confirm: key.NewBinding(
 			key.WithKeys("y", "enter"),
 			key.WithHelp("y/enter", "confirm"),
@@ -120,6 +135,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Enter, k.Backup, k.Delete, k.Edit},
 		{k.Login, k.Open, k.Search, k.Project, k.Usage},
+		{k.Sync, k.Export, k.Import},
 		{k.Help, k.Quit},
 	}
 }
