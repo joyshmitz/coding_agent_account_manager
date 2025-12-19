@@ -977,6 +977,63 @@ func (m Model) handleConfirmOverwriteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleSyncPanelKeys handles keys when the sync panel is visible.
+func (m Model) handleSyncPanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.syncPanel == nil {
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc", "S":
+		m.syncPanel.Toggle()
+		return m, nil
+
+	case "up", "k":
+		m.syncPanel.MoveUp()
+		return m, nil
+
+	case "down", "j":
+		m.syncPanel.MoveDown()
+		return m, nil
+
+	case "a":
+		// Add machine - TODO: show dialog
+		m.statusMsg = "Add machine dialog not yet implemented"
+		return m, nil
+
+	case "r":
+		if machine := m.syncPanel.SelectedMachine(); machine != nil {
+			return m, m.removeSyncMachine(machine.ID)
+		}
+		return m, nil
+
+	case "e":
+		if m.syncPanel.SelectedMachine() != nil {
+			m.statusMsg = "Edit machine dialog not yet implemented"
+		}
+		return m, nil
+
+	case "t":
+		if machine := m.syncPanel.SelectedMachine(); machine != nil {
+			m.statusMsg = "Testing connection to " + machine.Name + "..."
+			return m, m.testSyncMachine(machine.ID)
+		}
+		return m, nil
+
+	case "s":
+		// Trigger sync operation (placeholder)
+		m.statusMsg = "Sync not yet implemented"
+		return m, nil
+
+	case "l":
+		// Show sync log (placeholder)
+		m.statusMsg = "Sync log not yet implemented"
+		return m, nil
+	}
+
+	return m, nil
+}
+
 // executeBackup performs the actual backup operation.
 func (m Model) executeBackup(profileName string) (tea.Model, tea.Cmd) {
 	provider := m.currentProvider()
