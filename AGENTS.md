@@ -266,12 +266,13 @@ Use bv instead of parsing beads.jsonl—it computes PageRank, critical paths, cy
 
 ## Project Status
 
-**All 104 beads closed** - Project feature complete!
+**All 119 beads closed** - Project feature complete!
 
 ## Active Agents
 - **Gemini**: Performed deep security/reliability audit (`caam-sec-audit`, `caam-sec-win`). Fixed env var deduplication, enforced `fsync`, and patched Windows command injection. Improved URL detection (`caam-ux-url`). Extended `fsync` hardening to project store and PID files (`caam-hard-sync`).
 - **Codex (GPT-5.2)**: Fresh-eyes audit fixes landed: `caam-iks` (stale accx references/Makefile) and `caam-0ds` (DB stats last_error monotonic).
 - **LilacCastle (Claude Opus 4.5)**: Bug fixes in rotation/activate code; closed stealth epic `caam-e8o`.
+- **WhiteDog (Claude Opus 4.5)**: Joined project to monitor and assist with maintenance. Verified recent security commit (SSH host key hardening, zip bomb protection, queue processing fixes).
 
 ## Completed Work
 - [x] Investigate codebase
