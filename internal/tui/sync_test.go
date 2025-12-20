@@ -171,11 +171,11 @@ func TestSyncPanelSetState(t *testing.T) {
 	}
 
 	// Test with valid state and pool
+	pool := sync.NewSyncPool()
+	pool.Enabled = true
+	pool.AutoSync = true
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
-			Enabled:  true,
-			AutoSync: true,
-		},
+		Pool: pool,
 	}
 	// Add a machine to the pool
 	machine := sync.NewMachine("test-machine", "192.168.1.100")
@@ -204,7 +204,7 @@ func TestSyncPanelSetStateClampIndex(t *testing.T) {
 	panel.selectedIdx = 10 // Set to a high index
 
 	// Set state with no machines - should clamp to 0
-	panel.SetState(&sync.SyncState{Pool: &sync.MachinePool{}})
+	panel.SetState(&sync.SyncState{Pool: sync.NewSyncPool()})
 
 	if panel.selectedIdx != 0 {
 		t.Errorf("selectedIdx = %d, want 0 (clamped)", panel.selectedIdx)
@@ -242,9 +242,8 @@ func TestSyncPanelSelectedMachine(t *testing.T) {
 	}
 
 	// Add machines
-	state := &sync.SyncState{
-		Pool: &sync.MachinePool{},
-	}
+	pool := sync.NewSyncPool()
+	state := &sync.SyncState{Pool: pool}
 	m1 := sync.NewMachine("machine1", "192.168.1.1")
 	m2 := sync.NewMachine("machine2", "192.168.1.2")
 	state.Pool.AddMachine(m1)
@@ -281,9 +280,8 @@ func TestSyncPanelMoveUp(t *testing.T) {
 	panel := NewSyncPanel()
 
 	// Setup with multiple machines
-	state := &sync.SyncState{
-		Pool: &sync.MachinePool{},
-	}
+	pool := sync.NewSyncPool()
+	state := &sync.SyncState{Pool: pool}
 	state.Pool.AddMachine(sync.NewMachine("m1", "1.1.1.1"))
 	state.Pool.AddMachine(sync.NewMachine("m2", "2.2.2.2"))
 	state.Pool.AddMachine(sync.NewMachine("m3", "3.3.3.3"))
@@ -324,9 +322,8 @@ func TestSyncPanelMoveDown(t *testing.T) {
 	panel := NewSyncPanel()
 
 	// Setup with multiple machines
-	state := &sync.SyncState{
-		Pool: &sync.MachinePool{},
-	}
+	pool := sync.NewSyncPool()
+	state := &sync.SyncState{Pool: pool}
 	state.Pool.AddMachine(sync.NewMachine("m1", "1.1.1.1"))
 	state.Pool.AddMachine(sync.NewMachine("m2", "2.2.2.2"))
 	state.Pool.AddMachine(sync.NewMachine("m3", "3.3.3.3"))
@@ -535,12 +532,10 @@ func TestSyncPanelViewNoState(t *testing.T) {
 
 func TestSyncPanelViewEnabled(t *testing.T) {
 	panel := NewSyncPanel()
-	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
-			Enabled:  true,
-			AutoSync: true,
-		},
-	}
+	pool := sync.NewSyncPool()
+	pool.Enabled = true
+	pool.AutoSync = true
+	state := &sync.SyncState{Pool: pool}
 	panel.SetState(state)
 
 	view := panel.View()
@@ -555,12 +550,10 @@ func TestSyncPanelViewEnabled(t *testing.T) {
 
 func TestSyncPanelViewDisabled(t *testing.T) {
 	panel := NewSyncPanel()
-	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
-			Enabled:  false,
-			AutoSync: false,
-		},
-	}
+	pool := sync.NewSyncPool()
+	pool.Enabled = false
+	pool.AutoSync = false
+	state := &sync.SyncState{Pool: pool}
 	panel.SetState(state)
 
 	view := panel.View()
@@ -573,7 +566,7 @@ func TestSyncPanelViewDisabled(t *testing.T) {
 func TestSyncPanelViewNoMachines(t *testing.T) {
 	panel := NewSyncPanel()
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
@@ -589,7 +582,7 @@ func TestSyncPanelViewNoMachines(t *testing.T) {
 func TestSyncPanelViewWithMachines(t *testing.T) {
 	panel := NewSyncPanel()
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
@@ -614,7 +607,7 @@ func TestSyncPanelViewWithMachines(t *testing.T) {
 func TestSyncPanelViewWithSelectedMachine(t *testing.T) {
 	panel := NewSyncPanel()
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
@@ -635,7 +628,7 @@ func TestSyncPanelViewWithSelectedMachine(t *testing.T) {
 func TestSyncPanelViewWithError(t *testing.T) {
 	panel := NewSyncPanel()
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
@@ -659,7 +652,7 @@ func TestSyncPanelViewWithSize(t *testing.T) {
 	panel := NewSyncPanel()
 	panel.SetSize(80, 24)
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
@@ -676,7 +669,7 @@ func TestSyncPanelViewWithSize(t *testing.T) {
 func TestSyncPanelViewKeyHints(t *testing.T) {
 	panel := NewSyncPanel()
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
@@ -701,7 +694,7 @@ func TestSyncPanelViewKeyHints(t *testing.T) {
 func TestSyncPanelViewWithNonDefaultPort(t *testing.T) {
 	panel := NewSyncPanel()
 	state := &sync.SyncState{
-		Pool: &sync.MachinePool{
+		Pool: &sync.SyncPool{
 			Enabled: true,
 		},
 	}
