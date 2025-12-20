@@ -45,6 +45,17 @@ type AuthDetection struct {
 	Warning   string         // Any issues (e.g., "multiple auth files found")
 }
 
+// ValidationResult represents the result of token validation.
+type ValidationResult struct {
+	Provider  string    // Provider ID (e.g., "claude", "codex", "gemini")
+	Profile   string    // Profile name
+	Valid     bool      // Whether the token is valid
+	Method    string    // "passive" (no network) or "active" (API call)
+	ExpiresAt time.Time // When token expires (if known)
+	Error     string    // If validation failed, the reason why
+	CheckedAt time.Time // When this validation was performed
+}
+
 // DeviceCodeProvider extends Provider with device code flow support.
 // Providers that do not support this flow do not need to implement this interface.
 type DeviceCodeProvider interface {
@@ -118,6 +129,12 @@ type Provider interface {
 	// The targetProfile is the profile to import into (its directories should already exist).
 	// Returns list of files copied and any error.
 	ImportAuth(ctx context.Context, sourcePath string, targetProfile *profile.Profile) ([]string, error)
+
+	// ValidateToken validates that the authentication token actually works.
+	// If passive=true, only checks token expiry and format (no network calls).
+	// If passive=false, makes a minimal API call to verify the token is valid.
+	// Active validation may incur minimal API costs.
+	ValidateToken(ctx context.Context, p *profile.Profile, passive bool) (*ValidationResult, error)
 }
 
 // Registry holds all registered providers.

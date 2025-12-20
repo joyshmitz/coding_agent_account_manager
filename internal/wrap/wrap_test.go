@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/config"
 	caamdb "github.com/Dicklesworthstone/coding_agent_account_manager/internal/db"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/ratelimit"
@@ -289,5 +290,152 @@ func TestResult(t *testing.T) {
 	}
 	if r.RetryCount != 1 {
 		t.Errorf("RetryCount = %d, want 1", r.RetryCount)
+	}
+}
+
+func TestNextDelay(t *testing.T) {
+	t.Run("exponential backoff without jitter", func(t *testing.T) {
+		cfg := Config{
+			InitialDelay:      10 * time.Second,
+			MaxDelay:          5 * time.Minute,
+			BackoffMultiplier: 2.0,
+			Jitter:            false,
+		}
+
+		// attempt 0: 10s * 2^0 = 10s
+		d0 := cfg.NextDelay(0)
+		if d0 != 10*time.Second {
+			t.Errorf("NextDelay(0) = %v, want 10s", d0)
+		}
+
+		// attempt 1: 10s * 2^1 = 20s
+		d1 := cfg.NextDelay(1)
+		if d1 != 20*time.Second {
+			t.Errorf("NextDelay(1) = %v, want 20s", d1)
+		}
+
+		// attempt 2: 10s * 2^2 = 40s
+		d2 := cfg.NextDelay(2)
+		if d2 != 40*time.Second {
+			t.Errorf("NextDelay(2) = %v, want 40s", d2)
+		}
+	})
+
+	t.Run("respects max delay cap", func(t *testing.T) {
+		cfg := Config{
+			InitialDelay:      30 * time.Second,
+			MaxDelay:          1 * time.Minute,
+			BackoffMultiplier: 2.0,
+			Jitter:            false,
+		}
+
+		// attempt 5: 30s * 2^5 = 960s = 16m, but capped at 1m
+		d := cfg.NextDelay(5)
+		if d != 1*time.Minute {
+			t.Errorf("NextDelay(5) = %v, want 1m (max)", d)
+		}
+	})
+
+	t.Run("jitter adds variation", func(t *testing.T) {
+		cfg := Config{
+			InitialDelay:      10 * time.Second,
+			MaxDelay:          5 * time.Minute,
+			BackoffMultiplier: 2.0,
+			Jitter:            true,
+		}
+
+		// With jitter, delay should be within ±20% of 10s (8s to 12s)
+		d := cfg.NextDelay(0)
+		if d < 8*time.Second || d > 12*time.Second {
+			t.Errorf("NextDelay(0) with jitter = %v, want 8s-12s", d)
+		}
+	})
+
+	t.Run("negative attempt treated as zero", func(t *testing.T) {
+		cfg := Config{
+			InitialDelay:      10 * time.Second,
+			MaxDelay:          5 * time.Minute,
+			BackoffMultiplier: 2.0,
+			Jitter:            false,
+		}
+
+		d := cfg.NextDelay(-5)
+		if d != 10*time.Second {
+			t.Errorf("NextDelay(-5) = %v, want 10s", d)
+		}
+	})
+
+	t.Run("zero multiplier uses default of 2", func(t *testing.T) {
+		cfg := Config{
+			InitialDelay:      10 * time.Second,
+			MaxDelay:          5 * time.Minute,
+			BackoffMultiplier: 0, // Should default to 2.0
+			Jitter:            false,
+		}
+
+		d := cfg.NextDelay(1)
+		if d != 20*time.Second {
+			t.Errorf("NextDelay(1) with zero multiplier = %v, want 20s", d)
+		}
+	})
+}
+
+func TestShouldRetry(t *testing.T) {
+	cfg := Config{MaxRetries: 3}
+
+	tests := []struct {
+		attempt int
+		want    bool
+	}{
+		{0, true},
+		{1, true},
+		{2, true},
+		{3, false},
+		{4, false},
+	}
+
+	for _, tt := range tests {
+		got := cfg.ShouldRetry(tt.attempt)
+		if got != tt.want {
+			t.Errorf("ShouldRetry(%d) = %v, want %v", tt.attempt, got, tt.want)
+		}
+	}
+}
+
+func TestConfigFromGlobal(t *testing.T) {
+	// Create a global config with custom values
+	globalCfg := &config.Config{
+		Wrap: config.WrapConfig{
+			MaxRetries:        5,
+			InitialDelay:      config.Duration(45 * time.Second),
+			MaxDelay:          config.Duration(10 * time.Minute),
+			BackoffMultiplier: 1.5,
+			Jitter:            false,
+			CooldownDuration:  config.Duration(30 * time.Minute),
+		},
+	}
+
+	cfg := ConfigFromGlobal(globalCfg, "claude")
+
+	if cfg.Provider != "claude" {
+		t.Errorf("Provider = %q, want claude", cfg.Provider)
+	}
+	if cfg.MaxRetries != 5 {
+		t.Errorf("MaxRetries = %d, want 5", cfg.MaxRetries)
+	}
+	if cfg.InitialDelay != 45*time.Second {
+		t.Errorf("InitialDelay = %v, want 45s", cfg.InitialDelay)
+	}
+	if cfg.MaxDelay != 10*time.Minute {
+		t.Errorf("MaxDelay = %v, want 10m", cfg.MaxDelay)
+	}
+	if cfg.BackoffMultiplier != 1.5 {
+		t.Errorf("BackoffMultiplier = %v, want 1.5", cfg.BackoffMultiplier)
+	}
+	if cfg.Jitter != false {
+		t.Error("Jitter = true, want false")
+	}
+	if cfg.CooldownDuration != 30*time.Minute {
+		t.Errorf("CooldownDuration = %v, want 30m", cfg.CooldownDuration)
 	}
 }
