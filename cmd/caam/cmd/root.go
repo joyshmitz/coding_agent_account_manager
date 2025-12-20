@@ -312,6 +312,15 @@ var versionCmd = &cobra.Command{
 // AUTH FILE SWAPPING COMMANDS (PRIMARY USE CASE)
 // =============================================================================
 
+// backupOutput is the JSON output structure for backup command.
+type backupOutput struct {
+	Success bool   `json:"success"`
+	Tool    string `json:"tool"`
+	Profile string `json:"profile"`
+	Path    string `json:"path"`
+	Error   string `json:"error,omitempty"`
+}
+
 // backupCmd saves current auth files to the vault.
 var backupCmd = &cobra.Command{
 	Use:   "backup <tool> <profile-name>",
@@ -327,33 +336,67 @@ The auth files are copied to ~/.local/share/caam/vault/<tool>/<profile>/
 Examples:
   caam backup codex work-account
   caam backup claude personal-max
-  caam backup gemini team-ultra`,
+  caam backup gemini team-ultra
+  caam backup codex work --json`,
 	Args: cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		tool := strings.ToLower(args[0])
-		profileName := args[1]
+	RunE: runBackup,
+}
 
-		getFileSet, ok := tools[tool]
-		if !ok {
-			return fmt.Errorf("unknown tool: %s (supported: codex, claude, gemini)", tool)
+func init() {
+	backupCmd.Flags().Bool("json", false, "output as JSON")
+}
+
+func runBackup(cmd *cobra.Command, args []string) error {
+	tool := strings.ToLower(args[0])
+	profileName := args[1]
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+
+	output := backupOutput{
+		Tool:    tool,
+		Profile: profileName,
+	}
+
+	emitJSONError := func(err error) error {
+		if jsonOutput {
+			output.Success = false
+			output.Error = err.Error()
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(output)
+			return nil
 		}
+		return err
+	}
 
-		fileSet := getFileSet()
+	getFileSet, ok := tools[tool]
+	if !ok {
+		return emitJSONError(fmt.Errorf("unknown tool: %s (supported: codex, claude, gemini)", tool))
+	}
 
-		// Check if auth files exist
-		if !authfile.HasAuthFiles(fileSet) {
-			return fmt.Errorf("no auth files found for %s - login first using the tool's login command", tool)
-		}
+	fileSet := getFileSet()
 
-		// Backup to vault
-		if err := vault.Backup(fileSet, profileName); err != nil {
-			return fmt.Errorf("backup failed: %w", err)
-		}
+	// Check if auth files exist
+	if !authfile.HasAuthFiles(fileSet) {
+		return emitJSONError(fmt.Errorf("no auth files found for %s - login first using the tool's login command", tool))
+	}
 
-		fmt.Printf("Backed up %s auth to profile '%s'\n", tool, profileName)
-		fmt.Printf("  Vault: %s\n", vault.ProfilePath(tool, profileName))
-		return nil
-	},
+	// Backup to vault
+	if err := vault.Backup(fileSet, profileName); err != nil {
+		return emitJSONError(fmt.Errorf("backup failed: %w", err))
+	}
+
+	output.Success = true
+	output.Path = vault.ProfilePath(tool, profileName)
+
+	if jsonOutput {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(output)
+	}
+
+	fmt.Printf("Backed up %s auth to profile '%s'\n", tool, profileName)
+	fmt.Printf("  Vault: %s\n", output.Path)
+	return nil
 }
 
 // statusOutput is the JSON output structure for status command.

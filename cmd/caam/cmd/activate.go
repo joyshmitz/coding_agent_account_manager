@@ -215,7 +215,7 @@ func runActivate(cmd *cobra.Command, args []string) error {
 		}
 		for _, alt := range selection.Alternatives {
 			rot.Alternatives = append(rot.Alternatives, activateRotationAlternative{
-				Profile: alt.Profile,
+				Profile: alt.Name,
 				Score:   alt.Score,
 			})
 		}
