@@ -59,6 +59,43 @@ CREATE INDEX IF NOT EXISTS idx_limit_events_provider_profile ON limit_events(pro
 CREATE INDEX IF NOT EXISTS idx_limit_events_cooldown_until ON limit_events(cooldown_until);
 `,
 	},
+	{
+		Version: 3,
+		Name:    "cost_tracking",
+		Up: `
+-- Table for tracking wrap sessions with cost estimates
+CREATE TABLE IF NOT EXISTS wrap_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
+    started_at DATETIME NOT NULL,
+    ended_at DATETIME,
+    duration_seconds INTEGER DEFAULT 0,
+    exit_code INTEGER,
+    rate_limit_hit INTEGER DEFAULT 0,
+    estimated_cost_cents INTEGER DEFAULT 0,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_wrap_sessions_provider_profile ON wrap_sessions(provider, profile_name);
+CREATE INDEX IF NOT EXISTS idx_wrap_sessions_started_at ON wrap_sessions(started_at);
+
+-- Table for user-configurable cost rates per provider
+CREATE TABLE IF NOT EXISTS cost_rates (
+    provider TEXT PRIMARY KEY,
+    cents_per_minute INTEGER DEFAULT 0,
+    cents_per_session INTEGER DEFAULT 0,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default rates (can be overridden by user)
+INSERT OR IGNORE INTO cost_rates (provider, cents_per_minute, cents_per_session, updated_at)
+VALUES
+    ('claude', 5, 0, CURRENT_TIMESTAMP),
+    ('codex', 3, 0, CURRENT_TIMESTAMP),
+    ('gemini', 2, 0, CURRENT_TIMESTAMP);
+`,
+	},
 }
 
 func RunMigrations(db *sql.DB) error {

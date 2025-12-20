@@ -85,6 +85,12 @@ type Result struct {
 
 	// Err is any error that occurred during execution.
 	Err error
+
+	// StartTime is when the wrap session started.
+	StartTime time.Time
+
+	// Duration is how long the wrap session ran.
+	Duration time.Duration
 }
 
 // Wrapper orchestrates wrapped execution of AI CLI tools.
@@ -115,7 +121,15 @@ func NewWrapper(vault *authfile.Vault, db *caamdb.DB, healthStore *health.Storag
 
 // Run executes the wrapped command with automatic rate limit handling.
 func (w *Wrapper) Run(ctx context.Context) *Result {
-	result := &Result{}
+	result := &Result{
+		StartTime: time.Now(),
+	}
+
+	// Defer recording of the session
+	defer func() {
+		result.Duration = time.Since(result.StartTime)
+		w.recordSession(result)
+	}()
 
 	// Get available profiles
 	profiles, err := w.vault.List(w.config.Provider)
@@ -369,4 +383,38 @@ func binForProvider(provider string) string {
 	default:
 		return provider
 	}
+}
+
+// recordSession records a wrap session to the database for cost tracking.
+func (w *Wrapper) recordSession(result *Result) {
+	if w.db == nil {
+		return
+	}
+
+	// Determine the primary profile used (last one in the list)
+	profileName := ""
+	if len(result.ProfilesUsed) > 0 {
+		profileName = result.ProfilesUsed[len(result.ProfilesUsed)-1]
+	}
+
+	if profileName == "" {
+		return
+	}
+
+	session := caamdb.WrapSession{
+		Provider:     w.config.Provider,
+		ProfileName:  profileName,
+		StartedAt:    result.StartTime,
+		EndedAt:      result.StartTime.Add(result.Duration),
+		ExitCode:     result.ExitCode,
+		RateLimitHit: result.RateLimitHit,
+	}
+
+	// Notes can include retry count or error info
+	if result.RetryCount > 0 {
+		session.Notes = fmt.Sprintf("retries: %d", result.RetryCount)
+	}
+
+	// Best effort - don't fail the wrap if recording fails
+	_ = w.db.RecordWrapSession(session)
 }
