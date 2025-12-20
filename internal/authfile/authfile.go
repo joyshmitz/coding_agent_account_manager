@@ -242,6 +242,7 @@ func (v *Vault) Backup(fileSet AuthFileSet, profile string) error {
 	meta := struct {
 		Tool          string   `json:"tool"`
 		Profile       string   `json:"profile"`
+		Description   string   `json:"description,omitempty"` // Free-form notes about profile purpose
 		BackedUpAt    string   `json:"backed_up_at"`
 		Files         int      `json:"files"`
 		Type          string   `json:"type,omitempty"`       // user|system

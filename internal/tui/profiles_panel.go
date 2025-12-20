@@ -21,6 +21,7 @@ type ProfileInfo struct {
 	Locked         bool
 	LastUsed       time.Time
 	Account        string
+	Description    string // Free-form notes about this profile's purpose
 	IsActive       bool
 	HealthStatus   health.HealthStatus
 	TokenExpiry    time.Time

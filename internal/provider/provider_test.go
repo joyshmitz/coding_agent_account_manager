@@ -34,6 +34,9 @@ func (p *testProvider) Status(ctx context.Context, prof *profile.Profile) (*Prof
 func (p *testProvider) ValidateProfile(ctx context.Context, prof *profile.Profile) error {
 	return nil
 }
+func (p *testProvider) DetectExistingAuth() (*AuthDetection, error) {
+	return &AuthDetection{Provider: p.id, Found: false}, nil
+}
 
 func TestAuthModeConstants(t *testing.T) {
 	tests := []struct {

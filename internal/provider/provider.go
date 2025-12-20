@@ -112,6 +112,12 @@ type Provider interface {
 	// This is used for first-run experience to discover and import existing credentials.
 	// Detection is read-only and never modifies original files.
 	DetectExistingAuth() (*AuthDetection, error)
+
+	// ImportAuth imports detected auth files into a profile directory.
+	// The sourcePath specifies which auth file to import (should be from DetectExistingAuth).
+	// The targetProfile is the profile to import into (its directories should already exist).
+	// Returns list of files copied and any error.
+	ImportAuth(ctx context.Context, sourcePath string, targetProfile *profile.Profile) ([]string, error)
 }
 
 // Registry holds all registered providers.

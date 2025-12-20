@@ -396,6 +396,76 @@ func TestProfileSave(t *testing.T) {
 	}
 }
 
+func TestProfileDescriptionPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "claude", "with-description")
+
+	prof := &Profile{
+		Name:        "with-description",
+		Provider:    "claude",
+		AuthMode:    "oauth",
+		BasePath:    basePath,
+		Description: "Client X consulting project",
+		CreatedAt:   time.Now(),
+	}
+
+	// Save
+	if err := prof.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Load and verify Description persisted
+	metaPath := filepath.Join(basePath, "profile.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("failed to read saved profile: %v", err)
+	}
+
+	var loaded Profile
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to parse saved profile: %v", err)
+	}
+
+	if loaded.Description != "Client X consulting project" {
+		t.Errorf("loaded.Description = %q, want %q", loaded.Description, "Client X consulting project")
+	}
+}
+
+func TestProfileDescriptionOmitEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "codex", "no-description")
+
+	prof := &Profile{
+		Name:     "no-description",
+		Provider: "codex",
+		AuthMode: "api-key",
+		BasePath: basePath,
+		// Description intentionally left empty
+		CreatedAt: time.Now(),
+	}
+
+	// Save
+	if err := prof.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Read raw JSON and verify "description" key is not present
+	metaPath := filepath.Join(basePath, "profile.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("failed to read saved profile: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to parse saved profile: %v", err)
+	}
+
+	if _, exists := raw["description"]; exists {
+		t.Error("expected 'description' key to be omitted when empty")
+	}
+}
+
 func TestUpdateLastUsed(t *testing.T) {
 	tmpDir := t.TempDir()
 	basePath := filepath.Join(tmpDir, "codex", "test")

@@ -280,6 +280,20 @@ func formatAllCooldownWarning(tool string, remaining time.Duration, nextProfile 
 	return fmt.Sprintf("\033[33m%s: ⚠️  ALL profiles in cooldown (next available: %s in %s)\033[0m", tool, nextProfile, timeStr)
 }
 
+// truncateDescription truncates a description to maxLen characters, adding "..." if truncated.
+func truncateDescription(desc string, maxLen int) string {
+	if desc == "" {
+		return ""
+	}
+	if len(desc) <= maxLen {
+		return desc
+	}
+	if maxLen <= 3 {
+		return desc[:maxLen]
+	}
+	return desc[:maxLen-3] + "..."
+}
+
 func init() {
 	// Core commands (auth file swapping - PRIMARY)
 	rootCmd.AddCommand(versionCmd)
@@ -963,13 +977,15 @@ var profileAddCmd = &cobra.Command{
 	Long: `Create a new isolated profile for running multiple sessions simultaneously.
 
 Options:
-  --auth-mode    Authentication mode (oauth, api-key)
-  --browser      Browser command (chrome, firefox, or full path)
+  --auth-mode        Authentication mode (oauth, api-key)
+  --description, -d  Free-form notes about this profile's purpose
+  --browser          Browser command (chrome, firefox, or full path)
   --browser-profile  Browser profile name or directory
 
 Examples:
   caam profile add codex work
-  caam profile add claude personal --browser chrome --browser-profile "Profile 2"
+  caam profile add claude personal -d "Personal consulting projects"
+  caam profile add claude work --browser chrome --browser-profile "Profile 2"
   caam profile add gemini team --browser firefox --browser-profile "work-firefox"`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -990,6 +1006,12 @@ Examples:
 		prof, err := profileStore.Create(tool, name, authMode)
 		if err != nil {
 			return fmt.Errorf("create profile: %w", err)
+		}
+
+		// Set description if provided
+		description, _ := cmd.Flags().GetString("description")
+		if description != "" {
+			prof.Description = description
 		}
 
 		// Set browser configuration if provided
@@ -1023,6 +1045,9 @@ Examples:
 
 		fmt.Printf("Created profile %s/%s\n", tool, name)
 		fmt.Printf("  Path: %s\n", prof.BasePath)
+		if prof.Description != "" {
+			fmt.Printf("  Description: %s\n", prof.Description)
+		}
 		if prof.HasBrowserConfig() {
 			fmt.Printf("  Browser: %s\n", prof.BrowserDisplayName())
 		}
@@ -1035,6 +1060,7 @@ Examples:
 
 func init() {
 	profileAddCmd.Flags().String("auth-mode", "oauth", "authentication mode (oauth, api-key)")
+	profileAddCmd.Flags().StringP("description", "d", "", "free-form notes about this profile's purpose")
 	profileAddCmd.Flags().String("browser", "", "browser command (chrome, firefox, or full path)")
 	profileAddCmd.Flags().String("browser-profile", "", "browser profile name or directory")
 	profileAddCmd.Flags().String("browser-name", "", "human-friendly name for browser profile")
@@ -1063,7 +1089,12 @@ var profileLsCmd = &cobra.Command{
 				if p.IsLocked() {
 					status = " [locked]"
 				}
-				fmt.Printf("  %s/%s%s\n", p.Provider, p.Name, status)
+				desc := truncateDescription(p.Description, 40)
+				if desc != "" {
+					fmt.Printf("  %s/%s%s  %s\n", p.Provider, p.Name, status, desc)
+				} else {
+					fmt.Printf("  %s/%s%s\n", p.Provider, p.Name, status)
+				}
 			}
 			return nil
 		}
@@ -1086,7 +1117,12 @@ var profileLsCmd = &cobra.Command{
 				if p.IsLocked() {
 					status = " [locked]"
 				}
-				fmt.Printf("  %s%s\n", p.Name, status)
+				desc := truncateDescription(p.Description, 40)
+				if desc != "" {
+					fmt.Printf("  %-20s%s  %s\n", p.Name, status, desc)
+				} else {
+					fmt.Printf("  %s%s\n", p.Name, status)
+				}
 			}
 		}
 
@@ -1158,6 +1194,9 @@ var profileStatusCmd = &cobra.Command{
 		fmt.Printf("  Locked: %v\n", status.HasLockFile)
 		if prof.AccountLabel != "" {
 			fmt.Printf("  Account: %s\n", prof.AccountLabel)
+		}
+		if prof.Description != "" {
+			fmt.Printf("  Description: %s\n", prof.Description)
 		}
 		if prof.HasBrowserConfig() {
 			fmt.Printf("  Browser: %s\n", prof.BrowserDisplayName())
@@ -1253,6 +1292,63 @@ Examples:
 
 func init() {
 	profileUnlockCmd.Flags().BoolP("force", "f", false, "force unlock even if process is running (dangerous)")
+}
+
+var profileDescribeCmd = &cobra.Command{
+	Use:   "describe <tool> <name> [description]",
+	Short: "Set or show profile description",
+	Long: `Set or show the description for an isolated profile.
+
+If description is provided, sets it. Otherwise, shows the current description.
+Use --clear to remove the description.
+
+Examples:
+  caam profile describe claude work                    # Show description
+  caam profile describe claude work "Client projects"  # Set description
+  caam profile describe claude work --clear            # Remove description`,
+	Args: cobra.RangeArgs(2, 3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		tool := strings.ToLower(args[0])
+		name := args[1]
+
+		prof, err := profileStore.Load(tool, name)
+		if err != nil {
+			return err
+		}
+
+		clearFlag, _ := cmd.Flags().GetBool("clear")
+
+		if clearFlag {
+			prof.Description = ""
+			if err := prof.Save(); err != nil {
+				return fmt.Errorf("save profile: %w", err)
+			}
+			fmt.Printf("Cleared description for %s/%s\n", tool, name)
+			return nil
+		}
+
+		if len(args) == 3 {
+			prof.Description = args[2]
+			if err := prof.Save(); err != nil {
+				return fmt.Errorf("save profile: %w", err)
+			}
+			fmt.Printf("Set description for %s/%s: %s\n", tool, name, prof.Description)
+			return nil
+		}
+
+		// Show current description
+		if prof.Description == "" {
+			fmt.Printf("%s/%s has no description\n", tool, name)
+		} else {
+			fmt.Printf("%s/%s: %s\n", tool, name, prof.Description)
+		}
+		return nil
+	},
+}
+
+func init() {
+	profileDescribeCmd.Flags().Bool("clear", false, "remove the description")
+	profileCmd.AddCommand(profileDescribeCmd)
 }
 
 // loginCmd initiates login for an isolated profile.
