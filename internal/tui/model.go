@@ -915,9 +915,9 @@ func (m Model) handleBackupProfile() (tea.Model, tea.Cmd) {
 	// Create text input dialog for profile name
 	m.backupDialog = NewTextInputDialog(
 		fmt.Sprintf("Backup %s Auth", provider),
-		"Enter profile name (e.g., email address):",
+		"Enter profile name (alphanumeric, underscore, hyphen, or period):",
 	)
-	m.backupDialog.SetPlaceholder("user@example.com")
+	m.backupDialog.SetPlaceholder("work-main")
 	m.backupDialog.SetWidth(50)
 	m.state = stateBackupDialog
 	m.statusMsg = ""
@@ -963,11 +963,23 @@ func (m Model) processBackupSubmit(profileName string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Check for forbidden characters
-	if strings.ContainsAny(profileName, "/\\:*?\"<>|") {
-		m.statusMsg = "Profile name contains invalid characters"
+	// Check for reserved names
+	if profileName == "." || profileName == ".." {
+		m.statusMsg = "Profile name cannot be '.' or '..'"
 		m.backupDialog.Reset()
 		return m, nil
+	}
+
+	// Only allow alphanumeric, underscore, hyphen, and period
+	// This matches the vault validation in authfile.go and profile.go
+	// to prevent shell injection and filesystem issues
+	for _, r := range profileName {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.') {
+			m.statusMsg = "Profile name can only contain letters, numbers, underscore, hyphen, and period"
+			m.backupDialog.Reset()
+			return m, nil
+		}
 	}
 
 	// Check if profile already exists
@@ -1677,32 +1689,56 @@ func (m Model) renderStatusBar() string {
 // helpView renders the help screen.
 func (m Model) helpView() string {
 	help := `
-Keyboard Shortcuts
-==================
+caam - Coding Agent Account Manager
+====================================
+
+KEYBOARD SHORTCUTS
 
 Navigation
-  ↑/k     Move up
-  ↓/j     Move down
-  ←/h     Previous provider
-  →       Next provider
-  tab     Cycle providers
-  /       Search/filter profiles
+  ↑/k     Move up                    ←/h     Previous provider
+  ↓/j     Move down                  →       Next provider
+  tab     Cycle providers            /       Search/filter profiles
 
 Profile Actions
-  enter   Activate selected profile
-  l       Login/refresh auth
-  e       Edit profile
+  enter   Activate selected profile (instant switch!)
+  l       Login/refresh OAuth token
+  e       Edit profile settings
   o       Open account page in browser
   d       Delete profile (with confirmation)
-  p       Set project association (CWD)
+  p       Set project association for current directory
 
-Other Actions
-  b       Backup current auth state
-  u       Toggle usage stats panel (1/2/3/4 ranges)
+Vault & Data
+  b       Backup current auth to a new profile
+  u       Toggle usage stats panel (1/2/3/4 for time ranges)
+  S       Toggle sync panel
+  E       Export vault to encrypted bundle
+  I       Import vault from bundle
 
 General
-  ?       Toggle help
+  ?       Toggle this help
   q/esc   Quit
+
+HEALTH STATUS INDICATORS
+  🟢  Healthy   Token valid >1hr, no recent errors
+  🟡  Warning   Token expiring soon or minor issues
+  🔴  Critical  Token expired or repeated errors
+  ⚪  Unknown   Health data not available
+
+SMART PROFILE FEATURES (via CLI)
+  caam activate <tool> --auto     Smart rotation picks best profile
+  caam run <tool> -- <args>       Wrap CLI with auto-failover on rate limits
+  caam cooldown set <profile>     Mark profile as rate-limited
+  caam cooldown list              View active cooldowns
+  caam next <tool>                Preview which profile rotation would pick
+
+ROTATION ALGORITHMS (config.yaml → stealth.rotation.algorithm)
+  smart       Multi-factor scoring: health, cooldown, recency, plan type
+  round_robin Sequential cycling through profiles
+  random      Random selection
+
+PROJECT ASSOCIATIONS
+  Profiles can be linked to directories. When you activate in a project
+  directory, caam uses the associated profile automatically.
 
 Press any key to return...
 `
