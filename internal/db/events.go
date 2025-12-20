@@ -187,6 +187,65 @@ func (d *DB) GetEvents(provider, profile string, since time.Time, limit int) ([]
 	return out, nil
 }
 
+// ListRecentEvents returns recent events across all profiles.
+// Unlike GetEvents, provider and profile are optional filters.
+// If empty, all events are returned.
+func (d *DB) ListRecentEvents(limit int) ([]Event, error) {
+	if d == nil || d.conn == nil {
+		return nil, fmt.Errorf("db is not open")
+	}
+
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := d.conn.Query(
+		`SELECT timestamp, event_type, provider, profile_name, details, duration_seconds
+		 FROM activity_log
+		 ORDER BY timestamp DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query activity_log: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Event
+	for rows.Next() {
+		var tsStr string
+		var e Event
+		var details sql.NullString
+		var durationSeconds sql.NullInt64
+		if err := rows.Scan(&tsStr, &e.Type, &e.Provider, &e.ProfileName, &details, &durationSeconds); err != nil {
+			return nil, fmt.Errorf("scan activity_log: %w", err)
+		}
+
+		ts, err := parseSQLiteTime(tsStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse timestamp %q: %w", tsStr, err)
+		}
+		e.Timestamp = ts
+
+		if details.Valid && details.String != "" {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(details.String), &m); err == nil {
+				e.Details = m
+			}
+		}
+
+		if durationSeconds.Valid && durationSeconds.Int64 > 0 {
+			e.Duration = time.Duration(durationSeconds.Int64) * time.Second
+		}
+
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate activity_log: %w", err)
+	}
+	return out, nil
+}
+
 func (d *DB) GetStats(provider, profile string) (*ProfileStats, error) {
 	if d == nil || d.conn == nil {
 		return nil, fmt.Errorf("db is not open")
