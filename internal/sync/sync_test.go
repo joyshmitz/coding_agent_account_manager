@@ -901,6 +901,135 @@ func containsAll(s string, substrs ...string) bool {
 	return true
 }
 
+// TestLoadLocalIdentity tests loading identity without creating.
+func TestLoadLocalIdentity(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldXDG := os.Getenv("XDG_DATA_HOME")
+	os.Setenv("XDG_DATA_HOME", tmpDir)
+	defer os.Setenv("XDG_DATA_HOME", oldXDG)
+
+	// Should return nil when no identity exists
+	identity, err := LoadLocalIdentity()
+	if err != nil {
+		t.Fatalf("LoadLocalIdentity() error = %v", err)
+	}
+	if identity != nil {
+		t.Error("LoadLocalIdentity() should return nil when no identity exists")
+	}
+
+	// Create an identity first
+	created, err := GetOrCreateLocalIdentity()
+	if err != nil {
+		t.Fatalf("GetOrCreateLocalIdentity() error = %v", err)
+	}
+
+	// Now LoadLocalIdentity should return it
+	loaded, err := LoadLocalIdentity()
+	if err != nil {
+		t.Fatalf("LoadLocalIdentity() after create error = %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("LoadLocalIdentity() should return identity after creation")
+	}
+	if loaded.ID != created.ID {
+		t.Errorf("Loaded ID = %q, want %q", loaded.ID, created.ID)
+	}
+}
+
+// TestSyncDataDir tests SyncDataDir with different env settings.
+func TestSyncDataDir(t *testing.T) {
+	t.Run("with XDG_DATA_HOME", func(t *testing.T) {
+		oldXDG := os.Getenv("XDG_DATA_HOME")
+		os.Setenv("XDG_DATA_HOME", "/custom/data")
+		defer os.Setenv("XDG_DATA_HOME", oldXDG)
+
+		dir := SyncDataDir()
+		if !strings.Contains(dir, "/custom/data") {
+			t.Errorf("SyncDataDir() = %q, want to contain /custom/data", dir)
+		}
+		if !strings.HasSuffix(dir, filepath.Join("caam", "sync")) {
+			t.Errorf("SyncDataDir() = %q, want to end with caam/sync", dir)
+		}
+	})
+
+	t.Run("without XDG_DATA_HOME", func(t *testing.T) {
+		oldXDG := os.Getenv("XDG_DATA_HOME")
+		os.Unsetenv("XDG_DATA_HOME")
+		defer os.Setenv("XDG_DATA_HOME", oldXDG)
+
+		dir := SyncDataDir()
+		// Should use home directory
+		if !strings.Contains(dir, ".local/share/caam/sync") {
+			t.Errorf("SyncDataDir() = %q, want to contain .local/share/caam/sync", dir)
+		}
+	})
+}
+
+// TestExpandPath tests path expansion with tilde.
+func TestExpandPath(t *testing.T) {
+	homeDir, _ := os.UserHomeDir()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"~/.ssh/id_rsa", filepath.Join(homeDir, ".ssh/id_rsa")},
+		{"/absolute/path", "/absolute/path"},
+		{"relative/path", "relative/path"},
+		{"~/", filepath.Join(homeDir, "")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := expandPath(tt.input)
+			if got != tt.want {
+				t.Errorf("expandPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestToMachineEdgeCases tests edge cases for toMachine.
+func TestToMachineEdgeCases(t *testing.T) {
+	t.Run("empty name", func(t *testing.T) {
+		h := &sshHost{name: ""}
+		if m := h.toMachine(); m != nil {
+			t.Error("toMachine() with empty name should return nil")
+		}
+	})
+
+	t.Run("hostname is code hosting", func(t *testing.T) {
+		h := &sshHost{
+			name:     "mygh",
+			hostname: "github.com",
+		}
+		if m := h.toMachine(); m != nil {
+			t.Error("toMachine() with github hostname should return nil")
+		}
+	})
+
+	t.Run("no hostname uses name", func(t *testing.T) {
+		h := &sshHost{
+			name: "my-server",
+			port: "2222",
+			user: "admin",
+		}
+		m := h.toMachine()
+		if m == nil {
+			t.Fatal("toMachine() should return machine")
+		}
+		if m.Address != "my-server" {
+			t.Errorf("Address = %q, want %q", m.Address, "my-server")
+		}
+		if m.Port != 2222 {
+			t.Errorf("Port = %d, want 2222", m.Port)
+		}
+		if m.SSHUser != "admin" {
+			t.Errorf("SSHUser = %q, want %q", m.SSHUser, "admin")
+		}
+	})
+}
+
 // TestMergeDiscoveredMachines tests machine merging.
 func TestMergeDiscoveredMachines(t *testing.T) {
 	existing := []*Machine{
