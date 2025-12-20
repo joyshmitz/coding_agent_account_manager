@@ -179,8 +179,8 @@ func (s *SyncState) Load() error {
 
 // Save saves all sync state to disk.
 func (s *SyncState) Save() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Save pool (LocalMachineID is set during Load, not here to avoid races)
 	if s.Pool != nil {
