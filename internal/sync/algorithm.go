@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -518,7 +519,7 @@ func (s *Syncer) pullProfile(client *SSHClient, provider, profile string) error 
 		return fmt.Errorf("create local directory: %w", err)
 	}
 
-	// Read remote files and write locally
+	// Read remote files and write locally using atomic writes
 	for _, fi := range remoteFiles {
 		if fi.IsDir() {
 			continue
@@ -531,12 +532,68 @@ func (s *Syncer) pullProfile(client *SSHClient, provider, profile string) error 
 		}
 
 		localFilePath := filepath.Join(localPath, fi.Name())
-		if err := os.WriteFile(localFilePath, data, 0600); err != nil {
+		if err := atomicWriteFile(localFilePath, data, 0600); err != nil {
 			return fmt.Errorf("write local file %s: %w", fi.Name(), err)
 		}
 	}
 
 	return nil
+}
+
+// atomicWriteFile writes data to a file atomically using temp file + fsync + rename.
+// This prevents data corruption if the operation is interrupted.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+
+	// Generate unique temp file name
+	tmpName := fmt.Sprintf(".caam_tmp_%s", localRandomString(8))
+	tmpPath := filepath.Join(dir, tmpName)
+
+	// Write to temp file
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	// Sync to disk before rename to ensure durability
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+// localRandomString generates a random string for temp file names.
+func localRandomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	for i := range b {
+		b[i] = letters[int(b[i])%len(letters)]
+	}
+	return string(b)
 }
 
 // readLocalProfileFiles reads all files from a local profile directory.
