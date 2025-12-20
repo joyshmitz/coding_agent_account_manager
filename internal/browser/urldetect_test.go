@@ -703,8 +703,20 @@ func TestOutputCapture_Flush(t *testing.T) {
 	}
 }
 
+// safeBuffer is a thread-safe wrapper around bytes.Buffer.
+type safeBuffer struct {
+	buf bytes.Buffer
+	mu  sync.Mutex
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
 func TestOutputCapture_GetURLs_ThreadSafe(t *testing.T) {
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr safeBuffer
 	capture := NewOutputCapture(&stdout, &stderr)
 
 	var wg sync.WaitGroup

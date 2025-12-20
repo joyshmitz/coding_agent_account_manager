@@ -179,7 +179,7 @@ func TestSetupPassthroughs(t *testing.T) {
 	}
 
 	t.Run("creates symlinks for existing files", func(t *testing.T) {
-		if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+		if err := m.SetupPassthroughs(pseudoHome); err != nil {
 			t.Fatalf("SetupPassthroughs() error = %v", err)
 		}
 
@@ -214,7 +214,7 @@ func TestSetupPassthroughs(t *testing.T) {
 
 	t.Run("replaces existing symlinks", func(t *testing.T) {
 		// Run setup again - should not error
-		if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+		if err := m.SetupPassthroughs(pseudoHome); err != nil {
 			t.Fatalf("SetupPassthroughs() second run error = %v", err)
 		}
 
@@ -247,7 +247,7 @@ func TestSetupPassthroughs(t *testing.T) {
 		// Update manager to include the conflict path
 		m.passthroughs = append(m.passthroughs, ".conflict")
 
-		if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+		if err := m.SetupPassthroughs(pseudoHome); err != nil {
 			t.Fatalf("SetupPassthroughs() error = %v", err)
 		}
 
@@ -276,7 +276,7 @@ func TestSetupPassthroughs(t *testing.T) {
 		}
 
 		newPseudo := t.TempDir()
-		if err := m2.SetupPassthroughs(nil, newPseudo); err != nil {
+		if err := m2.SetupPassthroughs(newPseudo); err != nil {
 			t.Fatalf("SetupPassthroughs() error = %v", err)
 		}
 
@@ -307,12 +307,12 @@ func TestVerifyPassthroughs(t *testing.T) {
 	}
 
 	// Setup the symlink first
-	if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+	if err := m.SetupPassthroughs(pseudoHome); err != nil {
 		t.Fatal(err)
 	}
 
 	t.Run("reports valid symlinks", func(t *testing.T) {
-		statuses, err := m.VerifyPassthroughs(nil, pseudoHome)
+		statuses, err := m.VerifyPassthroughs(pseudoHome)
 		if err != nil {
 			t.Fatalf("VerifyPassthroughs() error = %v", err)
 		}
@@ -344,7 +344,7 @@ func TestVerifyPassthroughs(t *testing.T) {
 	})
 
 	t.Run("reports missing source", func(t *testing.T) {
-		statuses, _ := m.VerifyPassthroughs(nil, pseudoHome)
+		statuses, _ := m.VerifyPassthroughs(pseudoHome)
 
 		var found *Status
 		for i := range statuses {
@@ -379,7 +379,7 @@ func TestVerifyPassthroughs(t *testing.T) {
 			realHome:     realHome,
 		}
 
-		statuses, _ := m2.VerifyPassthroughs(nil, pseudoHome)
+		statuses, _ := m2.VerifyPassthroughs(pseudoHome)
 		if len(statuses) == 0 {
 			t.Fatal("expected status")
 		}
@@ -408,7 +408,7 @@ func TestVerifyPassthroughs(t *testing.T) {
 			realHome:     realHome,
 		}
 
-		statuses, _ := m2.VerifyPassthroughs(nil, pseudoHome)
+		statuses, _ := m2.VerifyPassthroughs(pseudoHome)
 		if len(statuses) == 0 {
 			t.Fatal("expected status")
 		}
@@ -443,7 +443,7 @@ func TestRemovePassthroughs(t *testing.T) {
 	}
 
 	// Setup symlinks
-	if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+	if err := m.SetupPassthroughs(pseudoHome); err != nil {
 		t.Fatal(err)
 	}
 
@@ -544,12 +544,12 @@ func TestSetupVerifyRemoveCycle(t *testing.T) {
 	}
 
 	// Setup
-	if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+	if err := m.SetupPassthroughs(pseudoHome); err != nil {
 		t.Fatalf("Setup failed: %v", err)
 	}
 
 	// Verify all valid
-	statuses, err := m.VerifyPassthroughs(nil, pseudoHome)
+	statuses, err := m.VerifyPassthroughs(pseudoHome)
 	if err != nil {
 		t.Fatalf("Verify failed: %v", err)
 	}
@@ -589,12 +589,12 @@ func TestManagerWithEmptyPaths(t *testing.T) {
 	pseudoHome := t.TempDir()
 
 	// Setup with empty paths should succeed
-	if err := m.SetupPassthroughs(nil, pseudoHome); err != nil {
+	if err := m.SetupPassthroughs(pseudoHome); err != nil {
 		t.Errorf("SetupPassthroughs() with empty paths error = %v", err)
 	}
 
 	// Verify should return empty
-	statuses, err := m.VerifyPassthroughs(nil, pseudoHome)
+	statuses, err := m.VerifyPassthroughs(pseudoHome)
 	if err != nil {
 		t.Errorf("VerifyPassthroughs() error = %v", err)
 	}
