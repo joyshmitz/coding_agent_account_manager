@@ -213,6 +213,74 @@ func getCooldownString(provider, profile string, opts health.FormatOptions) stri
 	return cooldownStr
 }
 
+// checkAllProfilesCooldown checks if all profiles for a tool are in cooldown.
+// Returns: allInCooldown (true if all profiles have active cooldowns),
+// shortestRemaining (duration until first profile is available),
+// bestProfile (name of the profile that will be available soonest).
+func checkAllProfilesCooldown(tool string) (bool, time.Duration, string) {
+	profiles, err := vault.List(tool)
+	if err != nil || len(profiles) == 0 {
+		return false, 0, ""
+	}
+
+	db, err := caamdb.Open()
+	if err != nil {
+		return false, 0, ""
+	}
+	defer db.Close()
+
+	now := time.Now()
+	profilesInCooldown := 0
+	var shortestRemaining time.Duration
+	var bestProfile string
+
+	for _, profile := range profiles {
+		cooldown, err := db.ActiveCooldown(tool, profile, now)
+		if err != nil || cooldown == nil {
+			// This profile is NOT in cooldown
+			return false, 0, ""
+		}
+
+		remaining := cooldown.CooldownUntil.Sub(now)
+		if remaining <= 0 {
+			// Cooldown expired, not in cooldown
+			return false, 0, ""
+		}
+
+		profilesInCooldown++
+		if shortestRemaining == 0 || remaining < shortestRemaining {
+			shortestRemaining = remaining
+			bestProfile = profile
+		}
+	}
+
+	// All profiles are in cooldown
+	return profilesInCooldown == len(profiles), shortestRemaining, bestProfile
+}
+
+// formatAllCooldownWarning formats the "all profiles in cooldown" warning.
+func formatAllCooldownWarning(tool string, remaining time.Duration, nextProfile string, opts health.FormatOptions) string {
+	var timeStr string
+	if remaining >= time.Hour {
+		hours := int(remaining.Hours())
+		mins := int(remaining.Minutes()) % 60
+		timeStr = fmt.Sprintf("%dh %dm", hours, mins)
+	} else {
+		mins := int(remaining.Minutes())
+		if mins < 1 {
+			timeStr = "<1m"
+		} else {
+			timeStr = fmt.Sprintf("%dm", mins)
+		}
+	}
+
+	if opts.NoColor {
+		return fmt.Sprintf("%s: ⚠️  ALL profiles in cooldown (next available: %s in %s)", tool, nextProfile, timeStr)
+	}
+	// Yellow warning
+	return fmt.Sprintf("\033[33m%s: ⚠️  ALL profiles in cooldown (next available: %s in %s)\033[0m", tool, nextProfile, timeStr)
+}
+
 func init() {
 	// Core commands (auth file swapping - PRIMARY)
 	rootCmd.AddCommand(versionCmd)
@@ -363,6 +431,13 @@ Examples:
 			rec := health.FormatRecommendation(tool, activeProfile, ph)
 			if rec != "" {
 				recommendations = append(recommendations, rec)
+			}
+
+			// Check if ALL profiles for this tool are in cooldown
+			allCooldown, nextAvail, nextProfile := checkAllProfilesCooldown(tool)
+			if allCooldown {
+				warning := formatAllCooldownWarning(tool, nextAvail, nextProfile, formatOpts)
+				warnings = append(warnings, warning)
 			}
 		}
 
