@@ -38,8 +38,8 @@ func TestOpenAt_CreatesDBAndRunsMigrations(t *testing.T) {
 	if err := d.Conn().QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read schema_version error = %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("schema_version max = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("schema_version max = %d, want 3", version)
 	}
 }
 

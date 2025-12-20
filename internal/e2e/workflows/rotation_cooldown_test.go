@@ -51,7 +51,7 @@ func TestE2E_CooldownEnforcesDuringAutoRotation(t *testing.T) {
 	vault := authfile.NewVault(vaultDir)
 
 	// Create 3 test profiles
-	profiles := []string{"profile1@example.com", "profile2@example.com", "profile3@example.com"}
+	profiles := []string{"profile1", "profile2", "profile3"}
 	for _, name := range profiles {
 		content := map[string]interface{}{
 			"access_token":  name + "-token",
@@ -170,19 +170,19 @@ func TestE2E_CooldownEnforcesDuringAutoRotation(t *testing.T) {
 	h.StartStep("clear_cooldown", "Testing cooldown clearing")
 
 	// Clear cooldown for profile2
-	cleared, err := db.ClearCooldown("codex", "profile2@example.com")
+	cleared, err := db.ClearCooldown("codex", "profile2")
 	if err != nil {
 		t.Fatalf("Failed to clear cooldown: %v", err)
 	}
-	h.LogInfo("Cleared cooldown", "profile", "profile2@example.com", "rows_affected", cleared)
+	h.LogInfo("Cleared cooldown", "profile", "profile2", "rows_affected", cleared)
 
 	// Selection should now succeed and select profile2 (only available)
 	result3, err := selector.Select("codex", profiles, "")
 	if err != nil {
 		t.Fatalf("Selection after clearing cooldown failed: %v", err)
 	}
-	if result3.Selected != "profile2@example.com" {
-		t.Errorf("Expected profile2@example.com (only non-cooldown), got %s", result3.Selected)
+	if result3.Selected != "profile2" {
+		t.Errorf("Expected profile2 (only non-cooldown), got %s", result3.Selected)
 	}
 	h.LogInfo("Post-clear selection", "selected", result3.Selected)
 
@@ -208,7 +208,7 @@ func TestE2E_RotationAlgorithms(t *testing.T) {
 	}
 	defer db.Close()
 
-	profiles := []string{"alpha@example.com", "beta@example.com", "gamma@example.com", "delta@example.com"}
+	profiles := []string{"alpha", "beta", "gamma", "delta"}
 	h.LogInfo("Test profiles created", "count", len(profiles))
 	h.EndStep("setup")
 
@@ -284,10 +284,10 @@ func TestE2E_RotationAlgorithms(t *testing.T) {
 	}
 	h.LogInfo("Round-robin results",
 		"selections", selections,
-		"alpha_count", profileCounts["alpha@example.com"],
-		"beta_count", profileCounts["beta@example.com"],
-		"gamma_count", profileCounts["gamma@example.com"],
-		"delta_count", profileCounts["delta@example.com"])
+		"alpha_count", profileCounts["alpha"],
+		"beta_count", profileCounts["beta"],
+		"gamma_count", profileCounts["gamma"],
+		"delta_count", profileCounts["delta"])
 
 	h.EndStep("round_robin_algorithm")
 
@@ -327,10 +327,10 @@ func TestE2E_RotationAlgorithms(t *testing.T) {
 
 	h.LogInfo("Random algorithm results",
 		"sample_selections", randomSelections[:5],
-		"alpha_count", randomCounts["alpha@example.com"],
-		"beta_count", randomCounts["beta@example.com"],
-		"gamma_count", randomCounts["gamma@example.com"],
-		"delta_count", randomCounts["delta@example.com"])
+		"alpha_count", randomCounts["alpha"],
+		"beta_count", randomCounts["beta"],
+		"gamma_count", randomCounts["gamma"],
+		"delta_count", randomCounts["delta"])
 
 	h.EndStep("random_algorithm")
 
@@ -369,8 +369,8 @@ func TestE2E_CooldownBypass(t *testing.T) {
 	vault := authfile.NewVault(vaultDir)
 
 	// Create profiles - one will be in cooldown, one won't be
-	profileInCooldown := "forced@example.com"
-	profileAvailable := "available@example.com"
+	profileInCooldown := "forced"
+	profileAvailable := "available"
 
 	for _, profileName := range []string{profileInCooldown, profileAvailable} {
 		content := map[string]interface{}{
@@ -518,9 +518,9 @@ func TestE2E_CooldownListAndClearAll(t *testing.T) {
 		profile  string
 		duration time.Duration
 	}{
-		{"codex", "work@example.com", 30 * time.Minute},
-		{"codex", "personal@example.com", 60 * time.Minute},
-		{"claude", "main@example.com", 45 * time.Minute},
+		{"codex", "work", 30 * time.Minute},
+		{"codex", "personal", 60 * time.Minute},
+		{"claude", "main", 45 * time.Minute},
 	}
 
 	for _, c := range cooldowns {
@@ -599,14 +599,14 @@ func TestE2E_RotationWithRecencyPenalty(t *testing.T) {
 	}
 	defer db.Close()
 
-	profiles := []string{"recent@example.com", "old@example.com", "never@example.com"}
+	profiles := []string{"recent", "old", "never"}
 
 	// Record recent activation for "recent" using LogEvent
 	recentEvent := caamdb.Event{
 		Timestamp:   time.Now().Add(-5 * time.Minute),
 		Type:        "activate",
 		Provider:    "codex",
-		ProfileName: "recent@example.com",
+		ProfileName: "recent",
 	}
 	err = db.LogEvent(recentEvent)
 	if err != nil {
@@ -618,7 +618,7 @@ func TestE2E_RotationWithRecencyPenalty(t *testing.T) {
 		Timestamp:   time.Now().Add(-2 * time.Hour),
 		Type:        "activate",
 		Provider:    "codex",
-		ProfileName: "old@example.com",
+		ProfileName: "old",
 	}
 	err = db.LogEvent(oldEvent)
 	if err != nil {
@@ -649,10 +649,10 @@ func TestE2E_RotationWithRecencyPenalty(t *testing.T) {
 	}
 
 	// "recent" should have a penalty, so "old" or "never" should be preferred
-	if result.Selected == "recent@example.com" {
+	if result.Selected == "recent" {
 		// Check if the score reflects the penalty
 		for _, alt := range result.Alternatives {
-			if alt.Name == "recent@example.com" {
+			if alt.Name == "recent" {
 				hasRecencyPenalty := false
 				for _, r := range alt.Reasons {
 					if !r.Positive && (contains(r.Text, "recently") || contains(r.Text, "Used")) {
@@ -661,7 +661,7 @@ func TestE2E_RotationWithRecencyPenalty(t *testing.T) {
 					}
 				}
 				if !hasRecencyPenalty {
-					t.Errorf("Expected recency penalty for recent@example.com")
+					t.Errorf("Expected recency penalty for recent")
 				}
 			}
 		}

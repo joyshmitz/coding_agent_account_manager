@@ -656,7 +656,7 @@ func TestE2E_SpecialCharactersInProfileName(t *testing.T) {
 
 	// Test various profile names
 	profileNames := []string{
-		"user@email.com",
+		"user",
 		"profile-with-dashes",
 		"profile_with_underscores",
 		"profile.with.dots",

@@ -32,7 +32,7 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 
 	// Create a profile in local vault with a specific expiry
 	localExpiry := time.Now().Add(24 * time.Hour)
-	createSyncTestProfile(t, h, localVaultDir, "codex", "user@example.com", localExpiry)
+	createSyncTestProfile(t, h, localVaultDir, "codex", "user", localExpiry)
 
 	h.LogInfo("Created vaults", map[string]interface{}{
 		"local_vault":  localVaultDir,
@@ -48,12 +48,12 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	h.StartStep("create_remote_profile", "Creating remote profile with older expiry")
 	// Create remote profile with older expiry (should be overwritten)
 	remoteExpiry := time.Now().Add(12 * time.Hour) // Older than local
-	createSyncTestProfile(t, h, remoteVaultDir, "codex", "user@example.com", remoteExpiry)
+	createSyncTestProfile(t, h, remoteVaultDir, "codex", "user", remoteExpiry)
 	h.EndStep("create_remote_profile")
 
 	h.StartStep("compare_freshness", "Comparing freshness between local and remote")
-	localFreshness := extractTestFreshness(t, h, localVaultDir, "codex", "user@example.com")
-	remoteFreshness := extractTestFreshness(t, h, remoteVaultDir, "codex", "user@example.com")
+	localFreshness := extractTestFreshness(t, h, localVaultDir, "codex", "user")
+	remoteFreshness := extractTestFreshness(t, h, remoteVaultDir, "codex", "user")
 
 	// Local should be fresher (later expiry)
 	localIsFresher := sync.CompareFreshness(localFreshness, remoteFreshness)
@@ -73,13 +73,13 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	h.StartStep("simulate_push", "Simulating push sync operation")
 	// Simulate push: copy local to remote
 	if localIsFresher {
-		err := copyProfile(localVaultDir, remoteVaultDir, "codex", "user@example.com")
+		err := copyProfile(localVaultDir, remoteVaultDir, "codex", "user")
 		if err != nil {
 			t.Fatalf("Failed to simulate push: %v", err)
 		}
 
 		// Verify remote now matches local
-		remoteAfterPush := extractTestFreshness(t, h, remoteVaultDir, "codex", "user@example.com")
+		remoteAfterPush := extractTestFreshness(t, h, remoteVaultDir, "codex", "user")
 		if !remoteAfterPush.ExpiresAt.Equal(localFreshness.ExpiresAt) {
 			t.Errorf("After push, remote expiry (%v) should match local (%v)",
 				remoteAfterPush.ExpiresAt, localFreshness.ExpiresAt)
@@ -100,12 +100,12 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	h.StartStep("update_remote", "Updating remote profile with newer expiry")
 	// Update remote to have newer expiry
 	newRemoteExpiry := time.Now().Add(48 * time.Hour) // Newer than local
-	createSyncTestProfile(t, h, remoteVaultDir, "codex", "user@example.com", newRemoteExpiry)
+	createSyncTestProfile(t, h, remoteVaultDir, "codex", "user", newRemoteExpiry)
 	h.EndStep("update_remote")
 
 	h.StartStep("compare_freshness_pull", "Comparing freshness for pull decision")
-	localFreshness = extractTestFreshness(t, h, localVaultDir, "codex", "user@example.com")
-	remoteFreshness = extractTestFreshness(t, h, remoteVaultDir, "codex", "user@example.com")
+	localFreshness = extractTestFreshness(t, h, localVaultDir, "codex", "user")
+	remoteFreshness = extractTestFreshness(t, h, remoteVaultDir, "codex", "user")
 
 	// Remote should be fresher now
 	remoteIsFresher := sync.CompareFreshness(remoteFreshness, localFreshness)
@@ -125,13 +125,13 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	h.StartStep("simulate_pull", "Simulating pull sync operation")
 	// Simulate pull: copy remote to local
 	if remoteIsFresher {
-		err := copyProfile(remoteVaultDir, localVaultDir, "codex", "user@example.com")
+		err := copyProfile(remoteVaultDir, localVaultDir, "codex", "user")
 		if err != nil {
 			t.Fatalf("Failed to simulate pull: %v", err)
 		}
 
 		// Verify local now matches remote
-		localAfterPull := extractTestFreshness(t, h, localVaultDir, "codex", "user@example.com")
+		localAfterPull := extractTestFreshness(t, h, localVaultDir, "codex", "user")
 		if !localAfterPull.ExpiresAt.Equal(remoteFreshness.ExpiresAt) {
 			t.Errorf("After pull, local expiry (%v) should match remote (%v)",
 				localAfterPull.ExpiresAt, remoteFreshness.ExpiresAt)
@@ -153,13 +153,13 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	// Create scenario: both modified with different expiries
 	localConflictExpiry := time.Now().Add(36 * time.Hour)
 	remoteConflictExpiry := time.Now().Add(72 * time.Hour) // Remote is fresher
-	createSyncTestProfile(t, h, localVaultDir, "codex", "user@example.com", localConflictExpiry)
-	createSyncTestProfile(t, h, remoteVaultDir, "codex", "user@example.com", remoteConflictExpiry)
+	createSyncTestProfile(t, h, localVaultDir, "codex", "user", localConflictExpiry)
+	createSyncTestProfile(t, h, remoteVaultDir, "codex", "user", remoteConflictExpiry)
 	h.EndStep("modify_both")
 
 	h.StartStep("resolve_conflict", "Resolving conflict by picking fresher token")
-	localFreshness = extractTestFreshness(t, h, localVaultDir, "codex", "user@example.com")
-	remoteFreshness = extractTestFreshness(t, h, remoteVaultDir, "codex", "user@example.com")
+	localFreshness = extractTestFreshness(t, h, localVaultDir, "codex", "user")
+	remoteFreshness = extractTestFreshness(t, h, remoteVaultDir, "codex", "user")
 
 	// Determine winner
 	var winner string
@@ -186,12 +186,12 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 
 	// Apply resolution (pull from remote)
 	if winner == "remote" {
-		err := copyProfile(remoteVaultDir, localVaultDir, "codex", "user@example.com")
+		err := copyProfile(remoteVaultDir, localVaultDir, "codex", "user")
 		if err != nil {
 			t.Fatalf("Failed to apply conflict resolution: %v", err)
 		}
 
-		localAfterResolution := extractTestFreshness(t, h, localVaultDir, "codex", "user@example.com")
+		localAfterResolution := extractTestFreshness(t, h, localVaultDir, "codex", "user")
 		if !localAfterResolution.ExpiresAt.Equal(winnerFreshness.ExpiresAt) {
 			t.Errorf("After resolution, local should have winner's expiry")
 		}
@@ -221,7 +221,7 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 
 	h.StartStep("simulate_failure", "Simulating sync failure and adding to queue")
 	// Simulate a sync failure - add to queue
-	state.AddToQueue("codex", "user@example.com", machine.ID, "connection refused")
+	state.AddToQueue("codex", "user", machine.ID, "connection refused")
 
 	// Verify entry was added
 	if len(state.Queue.Entries) != 1 {
@@ -229,7 +229,7 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	}
 
 	entry := state.Queue.Entries[0]
-	if entry.Provider != "codex" || entry.Profile != "user@example.com" {
+	if entry.Provider != "codex" || entry.Profile != "user" {
 		t.Errorf("Queue entry has wrong profile: %s/%s", entry.Provider, entry.Profile)
 	}
 	if entry.Attempts != 1 {
@@ -253,7 +253,7 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 		Timestamp: time.Now(),
 		Trigger:   "retry",
 		Provider:  "codex",
-		Profile:   "user@example.com",
+		Profile:   "user",
 		Machine:   machine.Name,
 		Action:    "push",
 		Success:   true,
@@ -261,7 +261,7 @@ func TestE2E_MultiMachineSyncWorkflow(t *testing.T) {
 	})
 
 	// Remove from queue (simulating successful sync)
-	state.RemoveFromQueue("codex", "user@example.com", machine.ID)
+	state.RemoveFromQueue("codex", "user", machine.ID)
 
 	// Verify removal
 	if len(state.Queue.Entries) != 0 {
@@ -444,9 +444,9 @@ func TestE2E_SyncQueueManagement(t *testing.T) {
 
 	h.StartStep("add_entries", "Adding multiple queue entries")
 	// Add entries for different profiles and machines
-	state.AddToQueue("codex", "user1@example.com", machine1.ID, "timeout")
-	state.AddToQueue("claude", "user2@example.com", machine1.ID, "auth failed")
-	state.AddToQueue("codex", "user1@example.com", machine2.ID, "connection refused")
+	state.AddToQueue("codex", "user1", machine1.ID, "timeout")
+	state.AddToQueue("claude", "user2", machine1.ID, "auth failed")
+	state.AddToQueue("codex", "user1", machine2.ID, "connection refused")
 
 	if len(state.Queue.Entries) != 3 {
 		t.Errorf("Expected 3 queue entries, got %d", len(state.Queue.Entries))
@@ -459,12 +459,12 @@ func TestE2E_SyncQueueManagement(t *testing.T) {
 
 	h.StartStep("retry_increment", "Testing retry count increment")
 	// Re-add an existing entry (should increment attempts)
-	state.AddToQueue("codex", "user1@example.com", machine1.ID, "timeout again")
+	state.AddToQueue("codex", "user1", machine1.ID, "timeout again")
 
 	var foundEntry *sync.QueueEntry
 	for i := range state.Queue.Entries {
 		e := &state.Queue.Entries[i]
-		if e.Provider == "codex" && e.Profile == "user1@example.com" && e.Machine == machine1.ID {
+		if e.Provider == "codex" && e.Profile == "user1" && e.Machine == machine1.ID {
 			foundEntry = e
 			break
 		}
@@ -484,7 +484,7 @@ func TestE2E_SyncQueueManagement(t *testing.T) {
 
 	h.StartStep("remove_entry", "Testing entry removal")
 	// Remove one entry
-	state.RemoveFromQueue("claude", "user2@example.com", machine1.ID)
+	state.RemoveFromQueue("claude", "user2", machine1.ID)
 
 	if len(state.Queue.Entries) != 2 {
 		t.Errorf("Expected 2 queue entries after removal, got %d", len(state.Queue.Entries))
@@ -492,7 +492,7 @@ func TestE2E_SyncQueueManagement(t *testing.T) {
 
 	// Verify the right entry was removed
 	for _, e := range state.Queue.Entries {
-		if e.Provider == "claude" && e.Profile == "user2@example.com" {
+		if e.Provider == "claude" && e.Profile == "user2" {
 			t.Error("Claude entry should have been removed")
 		}
 	}
@@ -552,7 +552,7 @@ func TestE2E_SyncHistoryTracking(t *testing.T) {
 			Timestamp: time.Now().Add(time.Duration(i) * time.Minute),
 			Trigger:   triggers[i%len(triggers)],
 			Provider:  "codex",
-			Profile:   "user@example.com",
+			Profile:   "user",
 			Machine:   "server-1",
 			Action:    actions[i%len(actions)],
 			Success:   i%3 != 0, // Some failures

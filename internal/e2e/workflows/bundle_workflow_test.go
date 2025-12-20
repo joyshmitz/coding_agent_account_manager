@@ -32,19 +32,19 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	importVaultDir := h.SubDir("import_vault")
 
 	// Create Codex profiles
-	codexWork := createTestProfile(t, h, vaultDir, "codex", "work@example.com", map[string]interface{}{
+	codexWork := createTestProfile(t, h, vaultDir, "codex", "work", map[string]interface{}{
 		"access_token":  "codex-work-token",
 		"refresh_token": "codex-work-refresh",
 		"token_type":    "Bearer",
 	})
-	codexPersonal := createTestProfile(t, h, vaultDir, "codex", "personal@example.com", map[string]interface{}{
+	codexPersonal := createTestProfile(t, h, vaultDir, "codex", "personal", map[string]interface{}{
 		"access_token":  "codex-personal-token",
 		"refresh_token": "codex-personal-refresh",
 		"token_type":    "Bearer",
 	})
 
 	// Create Claude profile
-	claudeMain := createTestProfile(t, h, vaultDir, "claude", "main@example.com", map[string]interface{}{
+	claudeMain := createTestProfile(t, h, vaultDir, "claude", "main", map[string]interface{}{
 		"session_token": "claude-session-123",
 		"expires_at":    "2025-12-31T00:00:00Z",
 	})
@@ -188,7 +188,7 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	// Verify imported profiles
 	h.StartStep("verify_import", "Verifying imported profiles")
 
-	importedCodexWork := filepath.Join(importVaultDir, "codex", "work@example.com", "auth.json")
+	importedCodexWork := filepath.Join(importVaultDir, "codex", "work", "auth.json")
 	if !fileExists(importedCodexWork) {
 		t.Errorf("Imported codex work profile not found")
 	} else {
@@ -201,7 +201,7 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 		h.LogInfo("Verified codex work profile", "token_prefix", auth["access_token"].(string)[:15]+"...")
 	}
 
-	importedClaudeMain := filepath.Join(importVaultDir, "claude", "main@example.com", ".claude.json")
+	importedClaudeMain := filepath.Join(importVaultDir, "claude", "main", ".claude.json")
 	if !fileExists(importedClaudeMain) {
 		t.Errorf("Imported claude main profile not found")
 	}
@@ -245,7 +245,7 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 
 	// Verify decrypted import
 	h.StartStep("verify_decrypted_import", "Verifying decrypted profiles")
-	decryptedProfile := filepath.Join(encryptedImportVaultDir, "codex", "personal@example.com", "auth.json")
+	decryptedProfile := filepath.Join(encryptedImportVaultDir, "codex", "personal", "auth.json")
 	if !fileExists(decryptedProfile) {
 		t.Errorf("Decrypted profile not found")
 	} else {
@@ -347,7 +347,7 @@ func TestE2E_BundleRoundTrip(t *testing.T) {
 	}{
 		{
 			provider: "codex",
-			name:     "user1@example.com",
+			name:     "user1",
 			content: map[string]interface{}{
 				"access_token": "unique-token-abc123",
 				"custom_field": "custom-value",
@@ -355,7 +355,7 @@ func TestE2E_BundleRoundTrip(t *testing.T) {
 		},
 		{
 			provider: "claude",
-			name:     "user2@example.com",
+			name:     "user2",
 			content: map[string]interface{}{
 				"session_token": "session-xyz789",
 				"settings": map[string]interface{}{
@@ -449,7 +449,7 @@ func TestE2E_BundleDryRun(t *testing.T) {
 	vaultDir := h.SubDir("vault")
 	outputDir := h.SubDir("output")
 
-	createTestProfile(t, h, vaultDir, "codex", "test@example.com", map[string]interface{}{
+	createTestProfile(t, h, vaultDir, "codex", "test", map[string]interface{}{
 		"access_token": "test-token",
 	})
 	h.EndStep("setup")

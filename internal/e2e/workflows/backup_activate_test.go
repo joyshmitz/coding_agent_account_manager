@@ -52,7 +52,7 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 		"refresh_token": "codex-account1-refresh-xyz789",
 		"token_type":    "Bearer",
 		"expires_in":    3600,
-		"account":       "account1@example.com",
+		"account":       "account1",
 	}
 	codexJSON1, _ := json.MarshalIndent(codexAccount1, "", "  ")
 	if err := os.WriteFile(codexAuthPath, codexJSON1, 0600); err != nil {
@@ -65,7 +65,7 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 		"session_token": "claude-personal-session-111",
 		"refresh_token": "claude-personal-refresh-222",
 		"expires_at":    time.Now().Add(24 * time.Hour).Format(time.RFC3339),
-		"account":       "personal@example.com",
+		"account":       "personal",
 	}
 	claudeMainJSON, _ := json.MarshalIndent(claudePersonal, "", "  ")
 	if err := os.WriteFile(claudeMainPath, claudeMainJSON, 0600); err != nil {
@@ -108,12 +108,12 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 	h.StartStep("backup_phase", "Backing up profiles for multiple accounts")
 
 	// Backup Codex account1
-	h.TimeStep("backup_codex_account1", "Backing up codex account1@example.com", func() {
-		if err := vault.Backup(codexFileSet, "account1@example.com"); err != nil {
+	h.TimeStep("backup_codex_account1", "Backing up codex account1", func() {
+		if err := vault.Backup(codexFileSet, "account1"); err != nil {
 			t.Fatalf("Backup codex account1 failed: %v", err)
 		}
 	})
-	h.LogInfo("Backed up codex account1", "profile", "account1@example.com")
+	h.LogInfo("Backed up codex account1", "profile", "account1")
 
 	// Switch Codex to account2 and backup
 	codexAccount2 := map[string]interface{}{
@@ -121,27 +121,27 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 		"refresh_token": "codex-account2-refresh-uvw012",
 		"token_type":    "Bearer",
 		"expires_in":    3600,
-		"account":       "account2@example.com",
+		"account":       "account2",
 	}
 	codexJSON2, _ := json.MarshalIndent(codexAccount2, "", "  ")
 	if err := os.WriteFile(codexAuthPath, codexJSON2, 0600); err != nil {
 		t.Fatalf("Failed to write codex account2 auth: %v", err)
 	}
 
-	h.TimeStep("backup_codex_account2", "Backing up codex account2@example.com", func() {
-		if err := vault.Backup(codexFileSet, "account2@example.com"); err != nil {
+	h.TimeStep("backup_codex_account2", "Backing up codex account2", func() {
+		if err := vault.Backup(codexFileSet, "account2"); err != nil {
 			t.Fatalf("Backup codex account2 failed: %v", err)
 		}
 	})
-	h.LogInfo("Backed up codex account2", "profile", "account2@example.com")
+	h.LogInfo("Backed up codex account2", "profile", "account2")
 
 	// Backup Claude personal
-	h.TimeStep("backup_claude_personal", "Backing up claude personal@example.com", func() {
-		if err := vault.Backup(claudeFileSet, "personal@example.com"); err != nil {
+	h.TimeStep("backup_claude_personal", "Backing up claude personal", func() {
+		if err := vault.Backup(claudeFileSet, "personal"); err != nil {
 			t.Fatalf("Backup claude personal failed: %v", err)
 		}
 	})
-	h.LogInfo("Backed up claude personal", "profile", "personal@example.com")
+	h.LogInfo("Backed up claude personal", "profile", "personal")
 
 	h.EndStep("backup_phase")
 
@@ -151,8 +151,8 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 	h.StartStep("activation_phase", "Testing profile activation")
 
 	// Activate Codex account1
-	h.TimeStep("activate_codex_account1", "Activating codex account1@example.com", func() {
-		if err := vault.Restore(codexFileSet, "account1@example.com"); err != nil {
+	h.TimeStep("activate_codex_account1", "Activating codex account1", func() {
+		if err := vault.Restore(codexFileSet, "account1"); err != nil {
 			t.Fatalf("Activate codex account1 failed: %v", err)
 		}
 	})
@@ -174,8 +174,8 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 	h.EndStep("verify_account1")
 
 	// Activate Codex account2
-	h.TimeStep("activate_codex_account2", "Activating codex account2@example.com", func() {
-		if err := vault.Restore(codexFileSet, "account2@example.com"); err != nil {
+	h.TimeStep("activate_codex_account2", "Activating codex account2", func() {
+		if err := vault.Restore(codexFileSet, "account2"); err != nil {
 			t.Fatalf("Activate codex account2 failed: %v", err)
 		}
 	})
@@ -208,15 +208,15 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActiveProfile failed: %v", err)
 	}
-	if active != "account2@example.com" {
-		t.Errorf("Expected 'account2@example.com' active, got '%s'", active)
+	if active != "account2" {
+		t.Errorf("Expected 'account2' active, got '%s'", active)
 	}
 	h.LogInfo("Status check", "active_profile", active)
 	h.EndStep("check_status_account2")
 
 	// Switch back to account1
-	h.TimeStep("switch_to_account1", "Switching to account1@example.com", func() {
-		if err := vault.Restore(codexFileSet, "account1@example.com"); err != nil {
+	h.TimeStep("switch_to_account1", "Switching to account1", func() {
+		if err := vault.Restore(codexFileSet, "account1"); err != nil {
 			t.Fatalf("Switch to account1 failed: %v", err)
 		}
 	})
@@ -227,8 +227,8 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActiveProfile failed: %v", err)
 	}
-	if active != "account1@example.com" {
-		t.Errorf("Expected 'account1@example.com' active, got '%s'", active)
+	if active != "account1" {
+		t.Errorf("Expected 'account1' active, got '%s'", active)
 	}
 	h.LogInfo("Status check after switch", "active_profile", active)
 	h.EndStep("check_status_account1")
@@ -293,12 +293,12 @@ func TestE2E_CompleteBackupActivateSwitchWorkflow(t *testing.T) {
 	// Verify vault structure
 	expectedStructure := map[string]string{
 		"codex":                              "dir",
-		"codex/account1@example.com":         "dir",
-		"codex/account2@example.com":         "dir",
-		"codex/account1@example.com/auth.json": "file",
-		"codex/account2@example.com/auth.json": "file",
+		"codex/account1":         "dir",
+		"codex/account2":         "dir",
+		"codex/account1/auth.json": "file",
+		"codex/account2/auth.json": "file",
 		"claude":                             "dir",
-		"claude/personal@example.com":        "dir",
+		"claude/personal":        "dir",
 	}
 
 	allMatch := true

@@ -150,6 +150,90 @@ func TestVaultBackup(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid characters in profile name fails", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		vaultDir := filepath.Join(tmpDir, "vault")
+		authDir := filepath.Join(tmpDir, "auth")
+
+		if err := os.MkdirAll(authDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		authFile := filepath.Join(authDir, "auth.json")
+		if err := os.WriteFile(authFile, []byte(`{"token": "secret123"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		v := NewVault(vaultDir)
+		fileSet := AuthFileSet{
+			Tool: "testtool",
+			Files: []AuthFileSpec{
+				{Tool: "testtool", Path: authFile, Required: true},
+			},
+		}
+
+		// Test various invalid characters that should be rejected:
+		// - Control characters (filesystem issues)
+		// - Shell metacharacters (command injection prevention)
+		// - Spaces (shell word splitting issues)
+		invalidNames := []string{
+			// Control characters
+			"profile\nwith\nnewlines",
+			"profile\twith\ttabs",
+			"profile\rwith\rcarriage",
+			"profile\x00with\x00null",
+			"profile\x1fwith\x1fcontrol",
+			"profile\x7fwith\x7fdel",
+			// Shell metacharacters (command injection vectors)
+			"profile$(touch /tmp/pwned)",
+			"profile`touch /tmp/pwned`",
+			"profile;rm -rf /",
+			"profile|cat /etc/passwd",
+			"profile&background",
+			"profile'quoted'",
+			`profile"doublequoted"`,
+			// Spaces (word splitting)
+			"profile with spaces",
+			// Other special characters
+			"profile@email",
+			"profile#hashtag",
+			"profile$var",
+			"profile%mod",
+			"profile^caret",
+			"profile*glob",
+			"profile?question",
+			"profile[bracket]",
+			"profile{brace}",
+			"profile<redirect>",
+			"profile!bang",
+			"profile~tilde",
+		}
+
+		for _, name := range invalidNames {
+			if err := v.Backup(fileSet, name); err == nil {
+				t.Errorf("Backup() should fail for profile name with invalid chars: %q", name)
+			}
+		}
+
+		// Test valid names that should pass
+		validNames := []string{
+			"simple",
+			"with-hyphen",
+			"with_underscore",
+			"with.period",
+			"MixedCase123",
+			"profile-1.backup_v2",
+		}
+
+		for _, name := range validNames {
+			// Create a fresh vault for each valid test
+			testVault := filepath.Join(tmpDir, "vault-valid-"+name)
+			vt := NewVault(testVault)
+			if err := vt.Backup(fileSet, name); err != nil {
+				t.Errorf("Backup() should succeed for valid profile name %q: %v", name, err)
+			}
+		}
+	})
+
 	t.Run("optional file missing succeeds", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		vaultDir := filepath.Join(tmpDir, "vault")
