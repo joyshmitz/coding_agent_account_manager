@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -544,6 +545,109 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// ImportAuth imports detected auth files into a profile directory.
+// For Gemini, this copies OAuth credentials, settings, or .env file.
+func (p *Provider) ImportAuth(ctx context.Context, sourcePath string, prof *profile.Profile) ([]string, error) {
+	// Validate source file exists
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("source auth file not found: %w", err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("source path is a directory, not a file")
+	}
+
+	var copiedFiles []string
+
+	basename := filepath.Base(sourcePath)
+	parentDir := filepath.Base(filepath.Dir(sourcePath))
+
+	// Determine target location based on source file type
+	switch {
+	case parentDir == ".gemini":
+		// Files from ~/.gemini/ go to profile home's .gemini/
+		targetDir := filepath.Join(prof.HomePath(), ".gemini")
+		if err := os.MkdirAll(targetDir, 0700); err != nil {
+			return nil, fmt.Errorf("create .gemini dir: %w", err)
+		}
+		targetPath := filepath.Join(targetDir, basename)
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return nil, fmt.Errorf("copy %s: %w", basename, err)
+		}
+		copiedFiles = append(copiedFiles, targetPath)
+
+	case parentDir == "gcloud":
+		// ADC files go to profile's gcloud config
+		targetDir := filepath.Join(prof.BasePath, "gcloud")
+		if err := os.MkdirAll(targetDir, 0700); err != nil {
+			return nil, fmt.Errorf("create gcloud dir: %w", err)
+		}
+		targetPath := filepath.Join(targetDir, basename)
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return nil, fmt.Errorf("copy %s: %w", basename, err)
+		}
+		copiedFiles = append(copiedFiles, targetPath)
+
+	default:
+		// Default: copy to .gemini directory
+		targetDir := filepath.Join(prof.HomePath(), ".gemini")
+		if err := os.MkdirAll(targetDir, 0700); err != nil {
+			return nil, fmt.Errorf("create .gemini dir: %w", err)
+		}
+		targetPath := filepath.Join(targetDir, basename)
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return nil, fmt.Errorf("copy %s: %w", basename, err)
+		}
+		copiedFiles = append(copiedFiles, targetPath)
+	}
+
+	return copiedFiles, nil
+}
+
+// copyFile copies a file from src to dst with fsync for durability.
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// Get source file info for permissions
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	// Write to temp file first for atomicity
+	tmpPath := dst + ".tmp"
+	dstFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode()&0600)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		dstFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+
+	// Sync to disk
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := dstFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	// Atomic rename
+	return os.Rename(tmpPath, dst)
 }
 
 // Ensure Provider implements the interface.

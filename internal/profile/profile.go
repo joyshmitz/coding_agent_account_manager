@@ -553,6 +553,168 @@ func (s *Store) ListAll() (map[string][]*Profile, error) {
 	return result, nil
 }
 
+// CloneOptions configures profile cloning behavior.
+type CloneOptions struct {
+	// WithAuth copies auth files from source to target.
+	WithAuth bool
+	// Description overrides the default "Cloned from <source>" description.
+	Description string
+	// Force allows overwriting an existing target profile.
+	Force bool
+}
+
+// Clone creates a new profile by cloning an existing one.
+// By default, copies configuration but not auth files.
+func (s *Store) Clone(provider, sourceName, targetName string, opts CloneOptions) (*Profile, error) {
+	if s == nil || strings.TrimSpace(s.basePath) == "" {
+		return nil, fmt.Errorf("profile store base path is empty")
+	}
+	var err error
+	provider, err = validateStoreSegment("provider", provider)
+	if err != nil {
+		return nil, err
+	}
+	sourceName, err = validateStoreSegment("name", sourceName)
+	if err != nil {
+		return nil, fmt.Errorf("source profile: %w", err)
+	}
+	targetName, err = validateStoreSegment("name", targetName)
+	if err != nil {
+		return nil, fmt.Errorf("target profile: %w", err)
+	}
+
+	if sourceName == targetName {
+		return nil, fmt.Errorf("source and target profile names cannot be the same")
+	}
+
+	// Load source profile
+	source, err := s.Load(provider, sourceName)
+	if err != nil {
+		return nil, fmt.Errorf("load source profile: %w", err)
+	}
+
+	// Check if target exists
+	targetPath := s.ProfilePath(provider, targetName)
+	if _, err := os.Stat(targetPath); err == nil {
+		if !opts.Force {
+			return nil, fmt.Errorf("profile %s/%s already exists (use --force to overwrite)", provider, targetName)
+		}
+		// Remove existing target
+		if err := os.RemoveAll(targetPath); err != nil {
+			return nil, fmt.Errorf("remove existing target: %w", err)
+		}
+	}
+
+	// Create new profile with cloned settings
+	target := &Profile{
+		Name:              targetName,
+		Provider:          provider,
+		AuthMode:          source.AuthMode,
+		BasePath:          targetPath,
+		CreatedAt:         time.Now(),
+		BrowserCommand:    source.BrowserCommand,
+		BrowserProfileDir: source.BrowserProfileDir,
+		BrowserProfileName: source.BrowserProfileName,
+	}
+
+	// Set description
+	if opts.Description != "" {
+		target.Description = opts.Description
+	} else {
+		target.Description = fmt.Sprintf("Cloned from %s", sourceName)
+	}
+
+	// Copy metadata
+	if source.Metadata != nil {
+		target.Metadata = make(map[string]string)
+		for k, v := range source.Metadata {
+			target.Metadata[k] = v
+		}
+	}
+
+	// Create directory structure
+	dirs := []string{
+		target.BasePath,
+		target.HomePath(),
+		target.XDGConfigPath(),
+		target.CodexHomePath(),
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, fmt.Errorf("create directory %s: %w", dir, err)
+		}
+	}
+
+	// Optionally copy auth files
+	if opts.WithAuth {
+		if err := copyAuthFiles(source, target); err != nil {
+			// Clean up on failure
+			os.RemoveAll(targetPath)
+			return nil, fmt.Errorf("copy auth files: %w", err)
+		}
+	}
+
+	// Save new profile
+	if err := target.Save(); err != nil {
+		os.RemoveAll(targetPath)
+		return nil, fmt.Errorf("save profile: %w", err)
+	}
+
+	return target, nil
+}
+
+// copyAuthFiles copies auth files from source to target profile.
+func copyAuthFiles(source, target *Profile) error {
+	// Copy home directory contents
+	if err := copyDir(source.HomePath(), target.HomePath()); err != nil {
+		return fmt.Errorf("copy home: %w", err)
+	}
+
+	// Copy xdg_config directory contents
+	if err := copyDir(source.XDGConfigPath(), target.XDGConfigPath()); err != nil {
+		return fmt.Errorf("copy xdg_config: %w", err)
+	}
+
+	// Copy codex_home directory contents
+	if err := copyDir(source.CodexHomePath(), target.CodexHomePath()); err != nil {
+		return fmt.Errorf("copy codex_home: %w", err)
+	}
+
+	return nil
+}
+
+// copyDir copies contents from src to dst directory.
+// Only copies files, not subdirectories (auth files are flat).
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Source doesn't exist, nothing to copy
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // Skip subdirectories
+		}
+
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", srcPath, err)
+		}
+
+		if err := os.WriteFile(dstPath, data, 0600); err != nil {
+			return fmt.Errorf("write %s: %w", dstPath, err)
+		}
+	}
+
+	return nil
+}
+
 // Exists checks if a profile exists.
 func (s *Store) Exists(provider, name string) bool {
 	if s == nil || strings.TrimSpace(s.basePath) == "" {

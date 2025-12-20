@@ -137,6 +137,32 @@ func (d Duration) String() string {
 	return time.Duration(d).String()
 }
 
+// MarshalJSON converts Duration to a JSON string like "30s" or "5m".
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + time.Duration(d).String() + `"`), nil
+}
+
+// UnmarshalJSON parses a duration string like "30s" or "5m".
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	// Remove quotes
+	if len(b) < 2 {
+		*d = 0
+		return nil
+	}
+	s := string(b[1 : len(b)-1])
+	if s == "" {
+		*d = 0
+		return nil
+	}
+
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = Duration(dur)
+	return nil
+}
+
 // DefaultSPMConfig returns sensible defaults for Smart Profile Management.
 func DefaultSPMConfig() *SPMConfig {
 	return &SPMConfig{

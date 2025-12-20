@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -466,6 +467,112 @@ func (p *Provider) DetectExistingAuth() (*provider.AuthDetection, error) {
 	}
 
 	return detection, nil
+}
+
+// ImportAuth imports detected auth files into a profile directory.
+func (p *Provider) ImportAuth(ctx context.Context, sourcePath string, prof *profile.Profile) ([]string, error) {
+	// Validate source file exists
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("source auth file not found: %w", err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("source path is a directory, not a file")
+	}
+
+	var copiedFiles []string
+
+	// Determine target based on source file type
+	basename := filepath.Base(sourcePath)
+	switch basename {
+	case ".claude.json":
+		// Copy to profile's home directory
+		targetPath := filepath.Join(prof.HomePath(), ".claude.json")
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return nil, fmt.Errorf("copy .claude.json: %w", err)
+		}
+		copiedFiles = append(copiedFiles, targetPath)
+
+	case "auth.json":
+		// Copy to profile's XDG config claude-code directory
+		targetDir := filepath.Join(prof.XDGConfigPath(), "claude-code")
+		if err := os.MkdirAll(targetDir, 0700); err != nil {
+			return nil, fmt.Errorf("create claude-code dir: %w", err)
+		}
+		targetPath := filepath.Join(targetDir, "auth.json")
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return nil, fmt.Errorf("copy auth.json: %w", err)
+		}
+		copiedFiles = append(copiedFiles, targetPath)
+
+	default:
+		// Try to copy to a reasonable location based on the source
+		if filepath.Base(filepath.Dir(sourcePath)) == "claude-code" {
+			// Source is from claude-code directory
+			targetDir := filepath.Join(prof.XDGConfigPath(), "claude-code")
+			if err := os.MkdirAll(targetDir, 0700); err != nil {
+				return nil, fmt.Errorf("create claude-code dir: %w", err)
+			}
+			targetPath := filepath.Join(targetDir, basename)
+			if err := copyFile(sourcePath, targetPath); err != nil {
+				return nil, fmt.Errorf("copy %s: %w", basename, err)
+			}
+			copiedFiles = append(copiedFiles, targetPath)
+		} else {
+			// Default: copy to home as is
+			targetPath := filepath.Join(prof.HomePath(), basename)
+			if err := copyFile(sourcePath, targetPath); err != nil {
+				return nil, fmt.Errorf("copy %s: %w", basename, err)
+			}
+			copiedFiles = append(copiedFiles, targetPath)
+		}
+	}
+
+	return copiedFiles, nil
+}
+
+// copyFile copies a file from src to dst with fsync for durability.
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// Get source file info for permissions
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	// Write to temp file first for atomicity
+	tmpPath := dst + ".tmp"
+	dstFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode()&0600)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		dstFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+
+	// Sync to disk
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := dstFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	// Atomic rename
+	return os.Rename(tmpPath, dst)
 }
 
 // Ensure Provider implements the interface.

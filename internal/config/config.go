@@ -55,6 +55,9 @@ type Config struct {
 
 	// CurrentWorkspace is the name of the currently active workspace.
 	CurrentWorkspace string `json:"current_workspace,omitempty"`
+
+	// Wrap configures retry and backoff behavior for the wrap command.
+	Wrap WrapConfig `json:"wrap,omitempty"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -63,6 +66,7 @@ func DefaultConfig() *Config {
 		DefaultProvider: "codex",
 		DefaultProfiles: make(map[string]string),
 		AutoLock:        true,
+		Wrap:            DefaultWrapConfig(),
 	}
 }
 

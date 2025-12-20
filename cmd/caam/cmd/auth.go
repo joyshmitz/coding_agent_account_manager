@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -55,7 +56,7 @@ var authCmd = &cobra.Command{
 
 Subcommands:
   detect  - Detect existing auth files in system locations
-  import  - Import detected auth into a caam profile (coming soon)`,
+  import  - Import detected auth into a caam profile`,
 }
 
 var authDetectCmd = &cobra.Command{
@@ -111,10 +112,53 @@ This is useful for first-run experience to discover and import existing credenti
 	},
 }
 
+// AuthImportResult represents the result of an auth import operation.
+type AuthImportResult struct {
+	Provider    string   `json:"provider"`
+	ProfileName string   `json:"profile_name"`
+	ProfilePath string   `json:"profile_path"`
+	SourceFile  string   `json:"source_file"`
+	CopiedFiles []string `json:"copied_files"`
+	Success     bool     `json:"success"`
+	Error       string   `json:"error,omitempty"`
+}
+
+var authImportCmd = &cobra.Command{
+	Use:   "import <tool>",
+	Short: "Import detected auth into a profile",
+	Long: `Import existing authentication files into a new caam profile.
+
+This detects existing auth credentials and imports them into a new profile,
+allowing you to manage multiple accounts without re-authenticating.
+
+The tool argument is required and specifies which CLI tool:
+  - claude  - Claude Code (Anthropic)
+  - codex   - Codex CLI (OpenAI)
+  - gemini  - Gemini CLI (Google)
+
+Examples:
+  caam auth import claude                    # Import Claude auth to 'default' profile
+  caam auth import codex -n work             # Import Codex auth to 'work' profile
+  caam auth import gemini --source ~/.gemini/settings.json  # Import specific file
+  caam auth import claude --force            # Overwrite existing profile
+  caam auth import claude --json             # Output as JSON
+
+Use 'caam auth detect' first to see what auth files are available.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runAuthImport,
+}
+
 func init() {
 	rootCmd.AddCommand(authCmd)
 	authCmd.AddCommand(authDetectCmd)
 	authDetectCmd.Flags().Bool("json", false, "output in JSON format")
+
+	authCmd.AddCommand(authImportCmd)
+	authImportCmd.Flags().StringP("name", "n", "default", "profile name")
+	authImportCmd.Flags().StringP("description", "d", "", "profile description")
+	authImportCmd.Flags().Bool("force", false, "overwrite existing profile")
+	authImportCmd.Flags().String("source", "", "path to auth file (overrides detection)")
+	authImportCmd.Flags().Bool("json", false, "output in JSON format")
 }
 
 func runAuthDetection(providers []provider.Provider) *AuthDetectReport {
@@ -307,4 +351,155 @@ func formatFileSize(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// runAuthImport implements the auth import command.
+func runAuthImport(cmd *cobra.Command, args []string) error {
+	tool := args[0]
+	name, _ := cmd.Flags().GetString("name")
+	description, _ := cmd.Flags().GetString("description")
+	force, _ := cmd.Flags().GetBool("force")
+	source, _ := cmd.Flags().GetString("source")
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+
+	// Validate provider
+	prov, ok := registry.Get(tool)
+	if !ok {
+		return fmt.Errorf("unknown tool: %s (supported: claude, codex, gemini)", tool)
+	}
+
+	// Check if profile exists
+	if profileStore.Exists(tool, name) && !force {
+		return fmt.Errorf("profile %s/%s already exists (use --force to overwrite)", tool, name)
+	}
+
+	// Determine source file
+	var sourcePath string
+	if source != "" {
+		// Use explicit source path
+		sourcePath = source
+		// Expand ~ to home directory
+		if strings.HasPrefix(sourcePath, "~/") {
+			if home, err := getHomeDir(); err == nil {
+				sourcePath = home + sourcePath[1:]
+			}
+		}
+		// Verify source exists
+		if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+			return fmt.Errorf("source file not found: %s", source)
+		}
+	} else {
+		// Auto-detect auth
+		detection, err := prov.DetectExistingAuth()
+		if err != nil {
+			return fmt.Errorf("detect auth: %w", err)
+		}
+		if !detection.Found || detection.Primary == nil {
+			return fmt.Errorf("no existing auth detected for %s; run 'caam auth detect %s' to see details or use --source", tool, tool)
+		}
+		sourcePath = detection.Primary.Path
+	}
+
+	result := AuthImportResult{
+		Provider:    tool,
+		ProfileName: name,
+		SourceFile:  sourcePath,
+	}
+
+	// Delete existing profile if force is set
+	if profileStore.Exists(tool, name) && force {
+		if err := profileStore.Delete(tool, name); err != nil {
+			result.Error = fmt.Sprintf("delete existing profile: %v", err)
+			if jsonOutput {
+				return outputImportResult(result)
+			}
+			return fmt.Errorf("delete existing profile: %w", err)
+		}
+	}
+
+	// Create profile
+	// Use "oauth" as default auth mode since we're importing existing auth
+	prof, err := profileStore.Create(tool, name, "oauth")
+	if err != nil {
+		result.Error = fmt.Sprintf("create profile: %v", err)
+		if jsonOutput {
+			return outputImportResult(result)
+		}
+		return fmt.Errorf("create profile: %w", err)
+	}
+
+	// Set description if provided
+	if description != "" {
+		prof.Description = description
+	}
+
+	// Save profile
+	if err := prof.Save(); err != nil {
+		profileStore.Delete(tool, name)
+		result.Error = fmt.Sprintf("save profile: %v", err)
+		if jsonOutput {
+			return outputImportResult(result)
+		}
+		return fmt.Errorf("save profile: %w", err)
+	}
+
+	// Prepare profile directory structure
+	ctx := context.Background()
+	if err := prov.PrepareProfile(ctx, prof); err != nil {
+		profileStore.Delete(tool, name)
+		result.Error = fmt.Sprintf("prepare profile: %v", err)
+		if jsonOutput {
+			return outputImportResult(result)
+		}
+		return fmt.Errorf("prepare profile: %w", err)
+	}
+
+	// Import auth files
+	copiedFiles, err := prov.ImportAuth(ctx, sourcePath, prof)
+	if err != nil {
+		profileStore.Delete(tool, name)
+		result.Error = fmt.Sprintf("import auth: %v", err)
+		if jsonOutput {
+			return outputImportResult(result)
+		}
+		return fmt.Errorf("import auth: %w", err)
+	}
+
+	result.Success = true
+	result.ProfilePath = prof.BasePath
+	result.CopiedFiles = copiedFiles
+
+	if jsonOutput {
+		return outputImportResult(result)
+	}
+
+	// Print success message
+	displayName := getProviderDisplayName(tool)
+	fmt.Printf("Successfully imported %s auth to profile '%s'\n", displayName, name)
+	fmt.Printf("\n")
+	fmt.Printf("  Profile: %s/%s\n", tool, name)
+	fmt.Printf("  Path: %s\n", prof.BasePath)
+	fmt.Printf("  Source: %s\n", shortenPath(sourcePath))
+	fmt.Printf("  Files copied:\n")
+	for _, f := range copiedFiles {
+		fmt.Printf("    - %s\n", shortenPath(f))
+	}
+	fmt.Printf("\n")
+	fmt.Printf("Next steps:\n")
+	fmt.Printf("  Run your CLI with: caam run %s/%s -- <your command>\n", tool, name)
+	fmt.Printf("  Or activate profile: eval $(caam env %s/%s)\n", tool, name)
+
+	return nil
+}
+
+func outputImportResult(result AuthImportResult) error {
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	if !result.Success {
+		return fmt.Errorf("%s", result.Error)
+	}
+	return nil
 }

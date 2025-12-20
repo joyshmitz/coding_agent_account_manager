@@ -20,6 +20,7 @@ type DetailInfo struct {
 	CreatedAt    time.Time
 	LastUsedAt   time.Time
 	Account      string
+	Description  string // Free-form notes about this profile's purpose
 	BrowserCmd   string
 	BrowserProf  string
 	HealthStatus health.HealthStatus
@@ -225,6 +226,11 @@ func (p *DetailPanel) View() string {
 	// Account
 	if prof.Account != "" {
 		rows = append(rows, p.renderRow("Account", prof.Account))
+	}
+
+	// Description
+	if prof.Description != "" {
+		rows = append(rows, p.renderRow("Notes", prof.Description))
 	}
 
 	// Browser config

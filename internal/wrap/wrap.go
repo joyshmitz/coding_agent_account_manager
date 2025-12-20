@@ -37,6 +37,22 @@ type Config struct {
 	// Set to 0 for no retries, 1 for one retry, etc.
 	MaxRetries int
 
+	// InitialDelay is the delay before the first retry.
+	// Default: 30s
+	InitialDelay time.Duration
+
+	// MaxDelay is the maximum delay between retries.
+	// Default: 5m
+	MaxDelay time.Duration
+
+	// BackoffMultiplier is the factor by which delay increases after each retry.
+	// Default: 2.0
+	BackoffMultiplier float64
+
+	// Jitter adds randomization to delays to prevent thundering herd.
+	// When true, delays vary by ±20%. Default: true
+	Jitter bool
+
 	// CooldownDuration is how long to set cooldown after a rate limit.
 	CooldownDuration time.Duration
 
@@ -60,13 +76,73 @@ type Config struct {
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		MaxRetries:       1,
-		CooldownDuration: 60 * time.Minute,
-		NotifyOnSwitch:   true,
-		Algorithm:        rotation.AlgorithmSmart,
-		Stdout:           os.Stdout,
-		Stderr:           os.Stderr,
+		MaxRetries:        3,
+		InitialDelay:      30 * time.Second,
+		MaxDelay:          5 * time.Minute,
+		BackoffMultiplier: 2.0,
+		Jitter:            true,
+		CooldownDuration:  60 * time.Minute,
+		NotifyOnSwitch:    true,
+		Algorithm:         rotation.AlgorithmSmart,
+		Stdout:            os.Stdout,
+		Stderr:            os.Stderr,
 	}
+}
+
+// ConfigFromGlobal creates a wrap.Config using settings from the global config.
+// Provider-specific overrides are applied if available.
+func ConfigFromGlobal(cfg *config.Config, provider string) Config {
+	wrapCfg := cfg.Wrap.ForProvider(provider)
+	return Config{
+		Provider:          provider,
+		MaxRetries:        wrapCfg.MaxRetries,
+		InitialDelay:      wrapCfg.InitialDelay.Duration(),
+		MaxDelay:          wrapCfg.MaxDelay.Duration(),
+		BackoffMultiplier: wrapCfg.BackoffMultiplier,
+		Jitter:            wrapCfg.Jitter,
+		CooldownDuration:  wrapCfg.CooldownDuration.Duration(),
+		NotifyOnSwitch:    true,
+		Algorithm:         rotation.AlgorithmSmart,
+		Stdout:            os.Stdout,
+		Stderr:            os.Stderr,
+	}
+}
+
+// NextDelay calculates the delay before the next retry attempt using exponential backoff.
+// Formula: delay = min(initial * multiplier^attempt, max)
+// With jitter: delay *= (0.8 + random*0.4) for ±20% variation
+func (c *Config) NextDelay(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+
+	// Calculate base delay with exponential backoff
+	initial := float64(c.InitialDelay)
+	multiplier := c.BackoffMultiplier
+	if multiplier <= 0 {
+		multiplier = 2.0
+	}
+
+	delay := initial * math.Pow(multiplier, float64(attempt))
+
+	// Cap at max delay
+	maxDelay := float64(c.MaxDelay)
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+
+	// Apply jitter if enabled (±20%)
+	if c.Jitter {
+		jitterFactor := 0.8 + rand.Float64()*0.4
+		delay *= jitterFactor
+	}
+
+	return time.Duration(delay)
+}
+
+// ShouldRetry returns true if another retry should be attempted.
+func (c *Config) ShouldRetry(attempt int) bool {
+	return attempt < c.MaxRetries
 }
 
 // Result is the outcome of a wrapped execution.
@@ -212,6 +288,21 @@ func (w *Wrapper) Run(ctx context.Context) *Result {
 			}
 
 			currentProfile = selection.Selected
+
+			// Calculate and apply backoff delay before retry
+			delay := w.config.NextDelay(attempt)
+			if w.config.NotifyOnSwitch {
+				fmt.Fprintf(w.config.Stderr, "⏳ Waiting %v before retry...\n", delay.Round(time.Second))
+			}
+
+			// Wait with context cancellation support
+			select {
+			case <-ctx.Done():
+				result.Err = ctx.Err()
+				return result
+			case <-time.After(delay):
+				// Continue to retry
+			}
 			continue
 		}
 

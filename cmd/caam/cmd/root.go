@@ -1351,6 +1351,68 @@ func init() {
 	profileCmd.AddCommand(profileDescribeCmd)
 }
 
+var profileCloneCmd = &cobra.Command{
+	Use:   "clone <tool> <source-profile> <target-profile>",
+	Short: "Clone an existing profile",
+	Long: `Clone an existing profile to create a new one with similar configuration.
+
+By default, copies settings (browser config, auth mode, metadata) but NOT auth files.
+Use --with-auth to also copy authentication credentials.
+
+Examples:
+  caam profile clone claude work new-client              # Clone settings only
+  caam profile clone codex main backup --with-auth       # Clone with auth files
+  caam profile clone claude work test -d "Testing only"  # Clone with custom description
+  caam profile clone gemini old new --force              # Overwrite existing target`,
+	Args: cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		tool := strings.ToLower(args[0])
+		sourceName := args[1]
+		targetName := args[2]
+
+		withAuth, _ := cmd.Flags().GetBool("with-auth")
+		description, _ := cmd.Flags().GetString("description")
+		force, _ := cmd.Flags().GetBool("force")
+
+		opts := profile.CloneOptions{
+			WithAuth:    withAuth,
+			Description: description,
+			Force:       force,
+		}
+
+		cloned, err := profileStore.Clone(tool, sourceName, targetName, opts)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("Cloned %s/%s → %s/%s\n", tool, sourceName, tool, targetName)
+		fmt.Printf("  Path: %s\n", cloned.BasePath)
+		if cloned.Description != "" {
+			fmt.Printf("  Description: %s\n", cloned.Description)
+		}
+		if withAuth {
+			fmt.Println("  Auth files: copied")
+		} else {
+			fmt.Println("  Auth files: not copied (use --with-auth to include)")
+		}
+
+		fmt.Printf("\nNext steps:\n")
+		if !withAuth {
+			fmt.Printf("  caam login %s %s    # Authenticate\n", tool, targetName)
+		}
+		fmt.Printf("  caam exec %s %s      # Run with this profile\n", tool, targetName)
+
+		return nil
+	},
+}
+
+func init() {
+	profileCloneCmd.Flags().Bool("with-auth", false, "also copy auth files from source")
+	profileCloneCmd.Flags().StringP("description", "d", "", "set custom description (default: \"Cloned from <source>\")")
+	profileCloneCmd.Flags().Bool("force", false, "overwrite existing target profile")
+	profileCmd.AddCommand(profileCloneCmd)
+}
+
 // loginCmd initiates login for an isolated profile.
 var loginCmd = &cobra.Command{
 	Use:   "login <tool> <profile>",

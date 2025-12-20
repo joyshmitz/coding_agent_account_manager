@@ -18,8 +18,8 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.MaxRetries != 1 {
-		t.Errorf("MaxRetries = %d, want 1", cfg.MaxRetries)
+	if cfg.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3", cfg.MaxRetries)
 	}
 	if cfg.CooldownDuration != 60*time.Minute {
 		t.Errorf("CooldownDuration = %v, want 60m", cfg.CooldownDuration)

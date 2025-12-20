@@ -771,3 +771,221 @@ func TestDefaultStorePath(t *testing.T) {
 		}
 	}
 }
+
+// =============================================================================
+// Clone Tests
+// =============================================================================
+
+func TestStoreClone(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Create source profile
+	source, err := store.Create("claude", "source", "oauth")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	source.Description = "Original profile"
+	source.BrowserCommand = "chrome"
+	source.BrowserProfileDir = "Profile 1"
+	source.Metadata = map[string]string{"key": "value"}
+	if err := source.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Clone without auth
+	cloned, err := store.Clone("claude", "source", "target", CloneOptions{})
+	if err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+
+	if cloned.Name != "target" {
+		t.Errorf("Name = %q, want %q", cloned.Name, "target")
+	}
+	if cloned.Provider != "claude" {
+		t.Errorf("Provider = %q, want %q", cloned.Provider, "claude")
+	}
+	if cloned.AuthMode != "oauth" {
+		t.Errorf("AuthMode = %q, want %q", cloned.AuthMode, "oauth")
+	}
+	if cloned.Description != "Cloned from source" {
+		t.Errorf("Description = %q, want %q", cloned.Description, "Cloned from source")
+	}
+	if cloned.BrowserCommand != "chrome" {
+		t.Errorf("BrowserCommand = %q, want %q", cloned.BrowserCommand, "chrome")
+	}
+	if cloned.BrowserProfileDir != "Profile 1" {
+		t.Errorf("BrowserProfileDir = %q, want %q", cloned.BrowserProfileDir, "Profile 1")
+	}
+	if cloned.Metadata["key"] != "value" {
+		t.Errorf("Metadata[key] = %q, want %q", cloned.Metadata["key"], "value")
+	}
+
+	// Verify cloned profile exists on disk
+	if !store.Exists("claude", "target") {
+		t.Error("expected cloned profile to exist")
+	}
+}
+
+func TestStoreCloneWithCustomDescription(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Create source
+	if _, err := store.Create("codex", "src", "api-key"); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Clone with custom description
+	cloned, err := store.Clone("codex", "src", "dst", CloneOptions{
+		Description: "Custom description",
+	})
+	if err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+
+	if cloned.Description != "Custom description" {
+		t.Errorf("Description = %q, want %q", cloned.Description, "Custom description")
+	}
+}
+
+func TestStoreCloneWithAuth(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Create source and add auth file
+	source, err := store.Create("claude", "with-auth", "oauth")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Create home directory (Store.Create doesn't create subdirs)
+	if err := os.MkdirAll(source.HomePath(), 0700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Create mock auth file in home directory
+	authPath := filepath.Join(source.HomePath(), "auth.json")
+	authContent := []byte(`{"token": "secret123"}`)
+	if err := os.WriteFile(authPath, authContent, 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// Clone with auth
+	cloned, err := store.Clone("claude", "with-auth", "cloned-auth", CloneOptions{
+		WithAuth: true,
+	})
+	if err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+
+	// Verify auth file was copied
+	clonedAuthPath := filepath.Join(cloned.HomePath(), "auth.json")
+	data, err := os.ReadFile(clonedAuthPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != string(authContent) {
+		t.Errorf("auth file content = %q, want %q", string(data), string(authContent))
+	}
+}
+
+func TestStoreCloneWithoutAuth(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Create source and add auth file
+	source, err := store.Create("claude", "has-auth", "oauth")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Create home directory (Store.Create doesn't create subdirs)
+	if err := os.MkdirAll(source.HomePath(), 0700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	authPath := filepath.Join(source.HomePath(), "auth.json")
+	if err := os.WriteFile(authPath, []byte("secret"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// Clone without auth (default)
+	cloned, err := store.Clone("claude", "has-auth", "no-auth", CloneOptions{})
+	if err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+
+	// Verify auth file was NOT copied
+	clonedAuthPath := filepath.Join(cloned.HomePath(), "auth.json")
+	if _, err := os.Stat(clonedAuthPath); !os.IsNotExist(err) {
+		t.Error("expected auth file to NOT be copied when WithAuth=false")
+	}
+}
+
+func TestStoreCloneErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Create source
+	if _, err := store.Create("claude", "existing", "oauth"); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Clone non-existent source
+	_, err := store.Clone("claude", "nonexistent", "target", CloneOptions{})
+	if err == nil {
+		t.Error("expected Clone() to fail for non-existent source")
+	}
+
+	// Clone to same name
+	_, err = store.Clone("claude", "existing", "existing", CloneOptions{})
+	if err == nil {
+		t.Error("expected Clone() to fail when source == target")
+	}
+
+	// Clone to existing target without --force
+	store.Create("claude", "target", "oauth")
+	_, err = store.Clone("claude", "existing", "target", CloneOptions{})
+	if err == nil {
+		t.Error("expected Clone() to fail when target exists without Force")
+	}
+
+	// Clone to existing target WITH --force
+	_, err = store.Clone("claude", "existing", "target", CloneOptions{Force: true})
+	if err != nil {
+		t.Errorf("Clone() with Force=true error = %v", err)
+	}
+}
+
+func TestStoreCloneIndependence(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Create source
+	source, err := store.Create("codex", "source", "oauth")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	source.Description = "Original"
+	source.Save()
+
+	// Clone
+	_, err = store.Clone("codex", "source", "clone", CloneOptions{})
+	if err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+
+	// Modify source
+	source.Description = "Modified"
+	source.Save()
+
+	// Load clone and verify it's unchanged
+	clone, err := store.Load("codex", "clone")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if clone.Description != "Cloned from source" {
+		t.Errorf("clone Description = %q, expected it to be independent of source modification", clone.Description)
+	}
+}

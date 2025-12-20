@@ -69,6 +69,10 @@ func (m *mockProvider) DetectExistingAuth() (*provider.AuthDetection, error) {
 	return &provider.AuthDetection{Provider: m.id, Found: false}, nil
 }
 
+func (m *mockProvider) ImportAuth(_ context.Context, _ string, _ *profile.Profile) ([]string, error) {
+	return nil, nil
+}
+
 // =============================================================================
 // NewRunner Tests
 // =============================================================================
