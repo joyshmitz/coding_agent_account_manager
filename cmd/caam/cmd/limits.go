@@ -40,6 +40,8 @@ func init() {
 	limitsCmd.Flags().String("format", "table", "output format: table, json")
 	limitsCmd.Flags().Bool("best", false, "show only the best profile for rotation")
 	limitsCmd.Flags().Float64("threshold", 0.8, "utilization threshold for rotation (0-1)")
+	limitsCmd.Flags().Bool("recommend", false, "show smart rotation recommendations")
+	limitsCmd.Flags().Bool("forecast", false, "show usage forecasts and optimal switch times")
 }
 
 func runLimits(cmd *cobra.Command, args []string) error {
@@ -47,6 +49,8 @@ func runLimits(cmd *cobra.Command, args []string) error {
 	format, _ := cmd.Flags().GetString("format")
 	showBest, _ := cmd.Flags().GetBool("best")
 	threshold, _ := cmd.Flags().GetFloat64("threshold")
+	showRecommend, _ := cmd.Flags().GetBool("recommend")
+	showForecast, _ := cmd.Flags().GetBool("forecast")
 
 	var providers []string
 	if len(args) > 0 {
@@ -98,6 +102,14 @@ func runLimits(cmd *cobra.Command, args []string) error {
 
 	if showBest {
 		return renderBestProfile(out, format, allResults, threshold)
+	}
+
+	if showRecommend {
+		return renderRecommendations(out, format, allResults, threshold)
+	}
+
+	if showForecast {
+		return renderForecast(out, format, allResults)
 	}
 
 	return renderLimits(out, format, allResults)
@@ -282,4 +294,250 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// Recommendation represents a smart rotation recommendation.
+type Recommendation struct {
+	Action      string `json:"action"`
+	Profile     string `json:"profile"`
+	Reason      string `json:"reason"`
+	Urgency     string `json:"urgency"` // "now", "soon", "later", "none"
+	SwitchIn    string `json:"switch_in,omitempty"`
+	CurrentLoad int    `json:"current_load_percent"`
+}
+
+// Forecast represents a usage forecast for a profile.
+type Forecast struct {
+	Profile           string `json:"profile"`
+	CurrentPrimary    int    `json:"current_primary_percent"`
+	CurrentSecondary  int    `json:"current_secondary_percent"`
+	PrimaryResetsIn   string `json:"primary_resets_in"`
+	SecondaryResetsIn string `json:"secondary_resets_in"`
+	SafeToUseIn       string `json:"safe_to_use_in,omitempty"`
+	Recommendation    string `json:"recommendation"`
+}
+
+func renderRecommendations(w io.Writer, format string, results []usage.ProfileUsage, threshold float64) error {
+	format = strings.ToLower(strings.TrimSpace(format))
+
+	recs := generateLimitsRecommendations(results, threshold)
+
+	switch format {
+	case "json":
+		data, err := json.MarshalIndent(recs, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(w, string(data))
+		return nil
+
+	case "table", "":
+		if len(recs) == 0 {
+			fmt.Fprintln(w, "No recommendations - all profiles are healthy.")
+			return nil
+		}
+
+		fmt.Fprintln(w, "Smart Rotation Recommendations")
+		fmt.Fprintln(w, "────────────────────────────────────────────────────────────────")
+
+		for _, rec := range recs {
+			urgencyIcon := "ℹ️ "
+			switch rec.Urgency {
+			case "now":
+				urgencyIcon = "🔴"
+			case "soon":
+				urgencyIcon = "🟡"
+			case "later":
+				urgencyIcon = "🟢"
+			}
+
+			fmt.Fprintf(w, "%s %s: %s\n", urgencyIcon, rec.Action, rec.Profile)
+			fmt.Fprintf(w, "   Reason: %s\n", rec.Reason)
+			if rec.SwitchIn != "" {
+				fmt.Fprintf(w, "   Switch in: %s\n", rec.SwitchIn)
+			}
+			fmt.Fprintln(w)
+		}
+
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func generateLimitsRecommendations(results []usage.ProfileUsage, threshold float64) []Recommendation {
+	var recs []Recommendation
+
+	// Group by provider
+	byProvider := make(map[string][]usage.ProfileUsage)
+	for _, r := range results {
+		byProvider[r.Provider] = append(byProvider[r.Provider], r)
+	}
+
+	thresholdPct := int(threshold * 100)
+
+	for provider, profiles := range byProvider {
+		// Find profiles that need attention
+		var nearLimit, healthy []usage.ProfileUsage
+		for _, p := range profiles {
+			if p.Usage == nil || p.Usage.Error != "" {
+				continue
+			}
+			if p.Usage.IsNearLimit(threshold) {
+				nearLimit = append(nearLimit, p)
+			} else {
+				healthy = append(healthy, p)
+			}
+		}
+
+		// Generate recommendations
+		for _, p := range nearLimit {
+			primary := 0
+			if p.Usage.PrimaryWindow != nil {
+				primary = p.Usage.PrimaryWindow.UsedPercent
+			}
+
+			urgency := "soon"
+			if primary >= 90 {
+				urgency = "now"
+			} else if primary >= thresholdPct {
+				urgency = "soon"
+			}
+
+			switchIn := ""
+			if ttl := p.Usage.TimeUntilReset(); ttl > 0 {
+				switchIn = formatLimitsDuration(ttl)
+			}
+
+			reason := fmt.Sprintf("Primary usage at %d%% (threshold: %d%%)", primary, thresholdPct)
+			if p.Usage.SecondaryWindow != nil && p.Usage.SecondaryWindow.UsedPercent >= thresholdPct {
+				reason += fmt.Sprintf(", secondary at %d%%", p.Usage.SecondaryWindow.UsedPercent)
+			}
+
+			rec := Recommendation{
+				Action:      "Switch from",
+				Profile:     fmt.Sprintf("%s/%s", provider, p.ProfileName),
+				Reason:      reason,
+				Urgency:     urgency,
+				SwitchIn:    switchIn,
+				CurrentLoad: primary,
+			}
+			recs = append(recs, rec)
+		}
+
+		// Suggest best alternative
+		if len(nearLimit) > 0 && len(healthy) > 0 {
+			// Find the one with lowest usage
+			best := healthy[0]
+			for _, h := range healthy[1:] {
+				if h.Usage.AvailabilityScore() > best.Usage.AvailabilityScore() {
+					best = h
+				}
+			}
+
+			bestPrimary := 0
+			if best.Usage.PrimaryWindow != nil {
+				bestPrimary = best.Usage.PrimaryWindow.UsedPercent
+			}
+
+			rec := Recommendation{
+				Action:      "Switch to",
+				Profile:     fmt.Sprintf("%s/%s", provider, best.ProfileName),
+				Reason:      fmt.Sprintf("Has %d%% availability (primary at %d%%)", best.Usage.AvailabilityScore(), bestPrimary),
+				Urgency:     "none",
+				CurrentLoad: bestPrimary,
+			}
+			recs = append(recs, rec)
+		}
+	}
+
+	return recs
+}
+
+func renderForecast(w io.Writer, format string, results []usage.ProfileUsage) error {
+	format = strings.ToLower(strings.TrimSpace(format))
+
+	forecasts := generateForecasts(results)
+
+	switch format {
+	case "json":
+		data, err := json.MarshalIndent(forecasts, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(w, string(data))
+		return nil
+
+	case "table", "":
+		if len(forecasts) == 0 {
+			fmt.Fprintln(w, "No usage data available for forecasting.")
+			return nil
+		}
+
+		fmt.Fprintln(w, "Usage Forecasts")
+		fmt.Fprintln(w, "────────────────────────────────────────────────────────────────")
+
+		for _, f := range forecasts {
+			fmt.Fprintf(w, "%s\n", f.Profile)
+			fmt.Fprintf(w, "  Current: Primary %d%%, Secondary %d%%\n", f.CurrentPrimary, f.CurrentSecondary)
+			fmt.Fprintf(w, "  Resets:  Primary in %s, Secondary in %s\n", f.PrimaryResetsIn, f.SecondaryResetsIn)
+			if f.SafeToUseIn != "" {
+				fmt.Fprintf(w, "  Safe to use in: %s\n", f.SafeToUseIn)
+			}
+			fmt.Fprintf(w, "  Recommendation: %s\n", f.Recommendation)
+			fmt.Fprintln(w)
+		}
+
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func generateForecasts(results []usage.ProfileUsage) []Forecast {
+	var forecasts []Forecast
+
+	for _, r := range results {
+		if r.Usage == nil || r.Usage.Error != "" {
+			continue
+		}
+
+		f := Forecast{
+			Profile: fmt.Sprintf("%s/%s", r.Provider, r.ProfileName),
+		}
+
+		if r.Usage.PrimaryWindow != nil {
+			f.CurrentPrimary = r.Usage.PrimaryWindow.UsedPercent
+			f.PrimaryResetsIn = formatLimitsDuration(time.Until(r.Usage.PrimaryWindow.ResetsAt))
+		}
+
+		if r.Usage.SecondaryWindow != nil {
+			f.CurrentSecondary = r.Usage.SecondaryWindow.UsedPercent
+			f.SecondaryResetsIn = formatLimitsDuration(time.Until(r.Usage.SecondaryWindow.ResetsAt))
+		}
+
+		// Determine when safe to use
+		if f.CurrentPrimary >= 80 {
+			// Need to wait for reset
+			f.SafeToUseIn = f.PrimaryResetsIn
+			f.Recommendation = fmt.Sprintf("Wait for primary window reset (%s)", f.PrimaryResetsIn)
+		} else if f.CurrentPrimary >= 50 {
+			f.Recommendation = "Use sparingly - approaching limit"
+		} else if f.CurrentPrimary >= 30 {
+			f.Recommendation = "Good availability - moderate usage"
+		} else {
+			f.Recommendation = "Excellent availability - safe for heavy usage"
+		}
+
+		// Adjust for secondary window
+		if f.CurrentSecondary >= 80 {
+			f.Recommendation += " (watch secondary limit)"
+		}
+
+		forecasts = append(forecasts, f)
+	}
+
+	return forecasts
 }
