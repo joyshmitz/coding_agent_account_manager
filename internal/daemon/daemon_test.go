@@ -677,3 +677,223 @@ func TestDaemonDoubleStart(t *testing.T) {
 		t.Error("expected error on double start")
 	}
 }
+
+func TestDaemon_CheckAndBackup_WithScheduler(t *testing.T) {
+	tmpDir := t.TempDir()
+	v := authfile.NewVault(tmpDir)
+	hs := health.NewStorage(filepath.Join(tmpDir, "health.json"))
+
+	cfg := &Config{
+		CheckInterval:    50 * time.Millisecond,
+		RefreshThreshold: 1 * time.Minute,
+		Verbose:          true,
+	}
+
+	d := New(v, hs, cfg)
+
+	// Manually set up a backup scheduler for testing
+	// Note: the scheduler is initialized in New() based on global config
+	// We test that checkAndBackup doesn't panic with or without scheduler
+
+	// This should not panic regardless of scheduler state
+	d.checkAndBackup()
+}
+
+func TestDaemon_CheckAndBackup_VerboseMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	v := authfile.NewVault(tmpDir)
+	hs := health.NewStorage(filepath.Join(tmpDir, "health.json"))
+
+	cfg := &Config{
+		CheckInterval:    50 * time.Millisecond,
+		RefreshThreshold: 1 * time.Minute,
+		Verbose:          true,
+	}
+
+	d := New(v, hs, cfg)
+
+	// Should not panic in verbose mode
+	d.checkAndBackup()
+}
+
+func TestWritePIDFile_ExistingProcess(t *testing.T) {
+	// Use a custom PID file path for this test
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "test-daemon.pid")
+
+	// Save and restore original path
+	originalPath := PIDFilePath()
+	SetPIDFilePath(customPath)
+	defer SetPIDFilePath(originalPath)
+
+	// First write should succeed
+	if err := WritePIDFile(); err != nil {
+		t.Fatalf("First WritePIDFile failed: %v", err)
+	}
+	defer os.Remove(customPath)
+
+	// Reading should return current PID
+	pid, err := ReadPIDFile()
+	if err != nil {
+		t.Fatalf("ReadPIDFile failed: %v", err)
+	}
+	if pid != os.Getpid() {
+		t.Errorf("PID = %d, want %d", pid, os.Getpid())
+	}
+
+	// Writing again should succeed (same process)
+	if err := WritePIDFile(); err != nil {
+		t.Errorf("Second WritePIDFile failed: %v", err)
+	}
+}
+
+func TestWritePIDFile_StaleFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "test-daemon.pid")
+
+	originalPath := PIDFilePath()
+	SetPIDFilePath(customPath)
+	defer SetPIDFilePath(originalPath)
+
+	// Create a stale PID file with non-existent process
+	os.WriteFile(customPath, []byte("999999999\n"), 0600)
+
+	// WritePIDFile should succeed (stale file removed)
+	if err := WritePIDFile(); err != nil {
+		t.Fatalf("WritePIDFile with stale file failed: %v", err)
+	}
+	defer os.Remove(customPath)
+
+	// Should have our PID now
+	pid, err := ReadPIDFile()
+	if err != nil {
+		t.Fatalf("ReadPIDFile failed: %v", err)
+	}
+	if pid != os.Getpid() {
+		t.Errorf("PID = %d, want %d", pid, os.Getpid())
+	}
+}
+
+func TestGetDaemonStatus_Running(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "test-daemon.pid")
+
+	originalPath := PIDFilePath()
+	SetPIDFilePath(customPath)
+	defer SetPIDFilePath(originalPath)
+
+	// Write our own PID (current process)
+	if err := WritePIDFile(); err != nil {
+		t.Fatalf("WritePIDFile failed: %v", err)
+	}
+	defer os.Remove(customPath)
+
+	// GetDaemonStatus should report running
+	running, pid, err := GetDaemonStatus()
+	if err != nil {
+		t.Fatalf("GetDaemonStatus failed: %v", err)
+	}
+	if !running {
+		t.Error("daemon should be reported as running")
+	}
+	if pid != os.Getpid() {
+		t.Errorf("PID = %d, want %d", pid, os.Getpid())
+	}
+}
+
+func TestDaemon_GetProfileHealth_CodexProfile(t *testing.T) {
+	tmpDir := t.TempDir()
+	v := authfile.NewVault(tmpDir)
+	hs := health.NewStorage(filepath.Join(tmpDir, "health.json"))
+
+	// Store health data for codex
+	expiry := time.Now().Add(1 * time.Hour)
+	ph := &health.ProfileHealth{
+		TokenExpiresAt: expiry,
+	}
+	if err := hs.UpdateProfile("codex", "test", ph); err != nil {
+		t.Fatalf("failed to update profile health: %v", err)
+	}
+
+	cfg := &Config{
+		CheckInterval: 50 * time.Millisecond,
+	}
+
+	d := New(v, hs, cfg)
+
+	gotPh := d.getProfileHealth("codex", "test")
+	if gotPh == nil {
+		t.Fatal("getProfileHealth should return health data from store")
+	}
+
+	if gotPh.TokenExpiresAt.IsZero() {
+		t.Error("TokenExpiresAt should not be zero")
+	}
+}
+
+func TestDaemon_GetProfileHealth_GeminiProfile(t *testing.T) {
+	tmpDir := t.TempDir()
+	v := authfile.NewVault(tmpDir)
+	hs := health.NewStorage(filepath.Join(tmpDir, "health.json"))
+
+	// Store health data for gemini
+	expiry := time.Now().Add(1 * time.Hour)
+	ph := &health.ProfileHealth{
+		TokenExpiresAt: expiry,
+	}
+	if err := hs.UpdateProfile("gemini", "test", ph); err != nil {
+		t.Fatalf("failed to update profile health: %v", err)
+	}
+
+	cfg := &Config{
+		CheckInterval: 50 * time.Millisecond,
+	}
+
+	d := New(v, hs, cfg)
+
+	gotPh := d.getProfileHealth("gemini", "test")
+	if gotPh == nil {
+		t.Fatal("getProfileHealth should return health data from store")
+	}
+}
+
+func TestDaemon_CheckAndRefresh_VerboseMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	v := authfile.NewVault(tmpDir)
+	hs := health.NewStorage(filepath.Join(tmpDir, "health.json"))
+
+	cfg := &Config{
+		CheckInterval:    50 * time.Millisecond,
+		RefreshThreshold: 1 * time.Minute,
+		Verbose:          true,
+	}
+
+	d := New(v, hs, cfg)
+
+	// Should not panic with verbose mode
+	d.checkAndRefresh()
+
+	stats := d.GetStats()
+	if stats.CheckCount != 1 {
+		t.Errorf("CheckCount should be 1, got %d", stats.CheckCount)
+	}
+}
+
+func TestStopDaemonByPID_CurrentProcess(t *testing.T) {
+	// We can't actually send SIGTERM to ourselves in a test,
+	// but we can verify the function handles the process lookup
+	// Testing with current process would terminate the test
+
+	// Test with a non-existent process instead
+	err := StopDaemonByPID(999999999)
+	if err == nil {
+		t.Error("StopDaemonByPID should error for non-existent PID")
+	}
+}
+
+func TestIsProcessRunning_Init(t *testing.T) {
+	// PID 1 (init) should exist on most Linux systems
+	// But we can't reliably test this across all environments
+	// Just verify the function doesn't panic for PID 1
+	_ = IsProcessRunning(1)
+}

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -295,5 +296,170 @@ func TestBackupScheduler_GetState(t *testing.T) {
 	}
 	if state.LastBackupPath != "/test/backup.tar.gz" {
 		t.Errorf("LastBackupPath = %s, want /test/backup.tar.gz", state.LastBackupPath)
+	}
+}
+
+func TestBackupScheduler_RecordError(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.BackupConfig{
+		Enabled:  true,
+		Location: filepath.Join(tmpDir, "backups"),
+	}
+
+	scheduler := NewBackupScheduler(cfg, filepath.Join(tmpDir, "vault"), newTestLogger())
+
+	// Record an error
+	testErr := os.ErrPermission
+	scheduler.recordError(testErr)
+
+	state := scheduler.GetState()
+	if state.LastError == "" {
+		t.Error("LastError should be set after recordError")
+	}
+	if state.LastErrorTime.IsZero() {
+		t.Error("LastErrorTime should be set after recordError")
+	}
+}
+
+func TestBackupScheduler_CreateBackup_NotDue(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.BackupConfig{
+		Enabled:  true,
+		Interval: config.Duration(24 * time.Hour),
+		Location: filepath.Join(tmpDir, "backups"),
+	}
+
+	scheduler := NewBackupScheduler(cfg, filepath.Join(tmpDir, "vault"), newTestLogger())
+	// Set last backup to recent time so it's not due
+	scheduler.state.LastBackup = time.Now().Add(-1 * time.Hour)
+
+	path, err := scheduler.CreateBackup()
+	if err != nil {
+		t.Fatalf("CreateBackup() error = %v", err)
+	}
+	if path != "" {
+		t.Error("CreateBackup() should return empty path when not due")
+	}
+}
+
+func TestBackupScheduler_CreateBackup_Disabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.BackupConfig{
+		Enabled: false,
+	}
+
+	scheduler := NewBackupScheduler(cfg, filepath.Join(tmpDir, "vault"), newTestLogger())
+
+	path, err := scheduler.CreateBackup()
+	if err != nil {
+		t.Fatalf("CreateBackup() error = %v", err)
+	}
+	if path != "" {
+		t.Error("CreateBackup() should return empty path when disabled")
+	}
+}
+
+func TestBackupScheduler_LoadState_NoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.BackupConfig{
+		Enabled: true,
+	}
+
+	scheduler := NewBackupScheduler(cfg, filepath.Join(tmpDir, "vault"), newTestLogger())
+
+	// Load state when no file exists - should succeed with empty state
+	err := scheduler.LoadState()
+	if err != nil {
+		t.Errorf("LoadState() error = %v, want nil", err)
+	}
+
+	state := scheduler.GetState()
+	if state.BackupCount != 0 {
+		t.Errorf("BackupCount = %d, want 0", state.BackupCount)
+	}
+}
+
+func TestBackupScheduler_LoadState_InvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.BackupConfig{
+		Enabled: true,
+	}
+
+	scheduler := NewBackupScheduler(cfg, filepath.Join(tmpDir, "vault"), newTestLogger())
+
+	// Create invalid JSON file
+	stateDir := filepath.Join(config.DefaultDataPath())
+	os.MkdirAll(stateDir, 0700)
+	statePath := filepath.Join(stateDir, "backup_state.json")
+	os.WriteFile(statePath, []byte("{invalid json"), 0600)
+	defer os.Remove(statePath)
+
+	err := scheduler.LoadState()
+	if err == nil {
+		t.Error("LoadState() should error on invalid JSON")
+	}
+}
+
+func TestBackupScheduler_ListBackups_NoDir(t *testing.T) {
+	cfg := &config.BackupConfig{
+		Enabled:  true,
+		Location: "/nonexistent/path",
+	}
+
+	scheduler := NewBackupScheduler(cfg, t.TempDir(), newTestLogger())
+
+	backups, err := scheduler.ListBackups()
+	if err != nil {
+		t.Fatalf("ListBackups() error = %v", err)
+	}
+	if len(backups) != 0 {
+		t.Errorf("len(backups) = %d, want 0", len(backups))
+	}
+}
+
+func TestBackupScheduler_RotateBackups_DefaultKeepLast(t *testing.T) {
+	tmpDir := t.TempDir()
+	backupDir := filepath.Join(tmpDir, "backups")
+	os.MkdirAll(backupDir, 0700)
+
+	// Create test backup files with proper names
+	for i := 1; i <= 10; i++ {
+		name := filepath.Join(backupDir, fmt.Sprintf("caam_export_2025-02-%02d_1200.zip", i))
+		os.WriteFile(name, []byte("test"), 0600)
+	}
+
+	cfg := &config.BackupConfig{
+		Enabled:  true,
+		KeepLast: 0, // 0 means use default (5)
+		Location: backupDir,
+	}
+
+	scheduler := NewBackupScheduler(cfg, filepath.Join(tmpDir, "vault"), newTestLogger())
+
+	// Should delete older backups, keeping default (5)
+	if err := scheduler.RotateBackups(); err != nil {
+		t.Fatalf("RotateBackups() error = %v", err)
+	}
+
+	backups, _ := scheduler.ListBackups()
+	// GetKeepLast() returns 5 when KeepLast is 0 (default)
+	if len(backups) != 5 {
+		t.Errorf("len(backups) = %d, want 5", len(backups))
+	}
+}
+
+func TestBackupScheduler_RotateBackups_NoDir(t *testing.T) {
+	cfg := &config.BackupConfig{
+		Enabled:  true,
+		KeepLast: 5,
+		Location: "/nonexistent/path",
+	}
+
+	scheduler := NewBackupScheduler(cfg, t.TempDir(), newTestLogger())
+
+	// Should not error on nonexistent directory
+	err := scheduler.RotateBackups()
+	if err != nil {
+		t.Errorf("RotateBackups() error = %v, want nil", err)
 	}
 }

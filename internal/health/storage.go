@@ -431,7 +431,7 @@ func (s *Storage) acquireFileLock() (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
-	if err := lockFile(f); err != nil {
+	if err := LockFile(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("lock file: %w", err)
 	}
@@ -440,7 +440,7 @@ func (s *Storage) acquireFileLock() (*os.File, error) {
 
 func (s *Storage) releaseFileLock(f *os.File) {
 	if f != nil {
-		unlockFile(f)
+		UnlockFile(f)
 		f.Close()
 	}
 }
