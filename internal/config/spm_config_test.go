@@ -779,3 +779,242 @@ future_section:
 		t.Errorf("RefreshThreshold = %v, want 5m", cfg.Health.RefreshThreshold)
 	}
 }
+
+func TestNewConfigSectionDefaults(t *testing.T) {
+	cfg := DefaultSPMConfig()
+
+	// Test alerts defaults
+	t.Run("Alerts", func(t *testing.T) {
+		if !cfg.Alerts.Enabled {
+			t.Error("Alerts.Enabled should be true by default")
+		}
+		if cfg.Alerts.WarningThreshold != 70 {
+			t.Errorf("Alerts.WarningThreshold = %d, want 70", cfg.Alerts.WarningThreshold)
+		}
+		if cfg.Alerts.CriticalThreshold != 85 {
+			t.Errorf("Alerts.CriticalThreshold = %d, want 85", cfg.Alerts.CriticalThreshold)
+		}
+		if !cfg.Alerts.Notifications.Terminal {
+			t.Error("Alerts.Notifications.Terminal should be true by default")
+		}
+		if !cfg.Alerts.Notifications.Desktop {
+			t.Error("Alerts.Notifications.Desktop should be true by default")
+		}
+		if cfg.Alerts.Notifications.Webhook != "" {
+			t.Errorf("Alerts.Notifications.Webhook should be empty by default, got %q", cfg.Alerts.Notifications.Webhook)
+		}
+	})
+
+	// Test handoff defaults
+	t.Run("Handoff", func(t *testing.T) {
+		if !cfg.Handoff.AutoTrigger {
+			t.Error("Handoff.AutoTrigger should be true by default")
+		}
+		if cfg.Handoff.DebounceDelay.Duration() != 2*time.Second {
+			t.Errorf("Handoff.DebounceDelay = %v, want 2s", cfg.Handoff.DebounceDelay)
+		}
+		if cfg.Handoff.MaxRetries != 1 {
+			t.Errorf("Handoff.MaxRetries = %d, want 1", cfg.Handoff.MaxRetries)
+		}
+		if !cfg.Handoff.FallbackToManual {
+			t.Error("Handoff.FallbackToManual should be true by default")
+		}
+	})
+
+	// Test rate limits defaults
+	t.Run("RateLimits", func(t *testing.T) {
+		if len(cfg.RateLimits.Claude) == 0 {
+			t.Error("RateLimits.Claude should have default patterns")
+		}
+		if len(cfg.RateLimits.Codex) == 0 {
+			t.Error("RateLimits.Codex should have default patterns")
+		}
+		if len(cfg.RateLimits.Gemini) == 0 {
+			t.Error("RateLimits.Gemini should have default patterns")
+		}
+	})
+
+	// Test login patterns defaults
+	t.Run("LoginPatterns", func(t *testing.T) {
+		if len(cfg.LoginPatterns.Claude.Success) == 0 {
+			t.Error("LoginPatterns.Claude.Success should have default patterns")
+		}
+		if len(cfg.LoginPatterns.Claude.Failure) == 0 {
+			t.Error("LoginPatterns.Claude.Failure should have default patterns")
+		}
+	})
+
+	// Test daemon defaults
+	t.Run("Daemon", func(t *testing.T) {
+		if cfg.Daemon.AuthPool.Enabled {
+			t.Error("Daemon.AuthPool.Enabled should be false by default")
+		}
+		if cfg.Daemon.AuthPool.MaxConcurrentRefresh != 3 {
+			t.Errorf("Daemon.AuthPool.MaxConcurrentRefresh = %d, want 3", cfg.Daemon.AuthPool.MaxConcurrentRefresh)
+		}
+		if cfg.Daemon.CheckInterval.Duration() != 5*time.Minute {
+			t.Errorf("Daemon.CheckInterval = %v, want 5m", cfg.Daemon.CheckInterval)
+		}
+		if cfg.Daemon.RefreshThreshold.Duration() != 30*time.Minute {
+			t.Errorf("Daemon.RefreshThreshold = %v, want 30m", cfg.Daemon.RefreshThreshold)
+		}
+	})
+
+	// Test subscriptions defaults
+	t.Run("Subscriptions", func(t *testing.T) {
+		if cfg.Subscriptions != nil {
+			t.Error("Subscriptions should be nil by default")
+		}
+	})
+}
+
+func TestNewConfigSectionValidation(t *testing.T) {
+	// Save original env
+	origCaamHome := os.Getenv("CAAM_HOME")
+	defer os.Setenv("CAAM_HOME", origCaamHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("CAAM_HOME", tmpDir)
+
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			name: "alerts warning > critical",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+alerts:
+  warning_threshold: 90
+  critical_threshold: 70
+`,
+			wantErr: "alerts.warning_threshold should be <= critical_threshold",
+		},
+		{
+			name: "alerts warning out of range",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+alerts:
+  warning_threshold: 150
+`,
+			wantErr: "alerts.warning_threshold must be between 0 and 100",
+		},
+		{
+			name: "negative handoff max_retries",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+handoff:
+  max_retries: -1
+`,
+			wantErr: "handoff.max_retries cannot be negative",
+		},
+		{
+			name: "negative subscription cost",
+			yaml: `
+version: 1
+health:
+  refresh_threshold: 10m
+  warning_threshold: 1h
+  penalty_decay_rate: 0.8
+  penalty_decay_interval: 5m
+subscriptions:
+  claude:
+    plan: max
+    monthly_cost: -100
+`,
+			wantErr: "monthly_cost cannot be negative",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			if err := os.WriteFile(configPath, []byte(tc.yaml), 0600); err != nil {
+				t.Fatalf("Failed to write config file: %v", err)
+			}
+
+			_, err := LoadSPMConfig()
+			if err == nil {
+				t.Errorf("LoadSPMConfig() should return error")
+			} else if !contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want to contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestNewConfigSectionLoadAndSave(t *testing.T) {
+	// Save original env
+	origCaamHome := os.Getenv("CAAM_HOME")
+	defer os.Setenv("CAAM_HOME", origCaamHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("CAAM_HOME", tmpDir)
+
+	// Create config with custom values
+	cfg := DefaultSPMConfig()
+	cfg.Alerts.WarningThreshold = 60
+	cfg.Alerts.CriticalThreshold = 80
+	cfg.Alerts.Notifications.Webhook = "https://example.com/webhook"
+	cfg.Handoff.DebounceDelay = Duration(5 * time.Second)
+	cfg.Handoff.MaxRetries = 3
+	cfg.Daemon.AuthPool.Enabled = true
+	cfg.Daemon.AuthPool.MaxConcurrentRefresh = 5
+	cfg.Subscriptions = map[string]SubscriptionConfig{
+		"claude": {Plan: "max", MonthlyCost: 200},
+		"codex":  {Plan: "pro", MonthlyCost: 20},
+	}
+
+	// Save
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Load
+	loaded, err := LoadSPMConfig()
+	if err != nil {
+		t.Fatalf("LoadSPMConfig() error = %v", err)
+	}
+
+	// Verify new sections
+	if loaded.Alerts.WarningThreshold != 60 {
+		t.Errorf("Loaded Alerts.WarningThreshold = %d, want 60", loaded.Alerts.WarningThreshold)
+	}
+	if loaded.Alerts.Notifications.Webhook != "https://example.com/webhook" {
+		t.Errorf("Loaded Alerts.Notifications.Webhook = %q, want webhook URL", loaded.Alerts.Notifications.Webhook)
+	}
+	if loaded.Handoff.DebounceDelay.Duration() != 5*time.Second {
+		t.Errorf("Loaded Handoff.DebounceDelay = %v, want 5s", loaded.Handoff.DebounceDelay)
+	}
+	if loaded.Handoff.MaxRetries != 3 {
+		t.Errorf("Loaded Handoff.MaxRetries = %d, want 3", loaded.Handoff.MaxRetries)
+	}
+	if !loaded.Daemon.AuthPool.Enabled {
+		t.Error("Loaded Daemon.AuthPool.Enabled should be true")
+	}
+	if loaded.Daemon.AuthPool.MaxConcurrentRefresh != 5 {
+		t.Errorf("Loaded Daemon.AuthPool.MaxConcurrentRefresh = %d, want 5", loaded.Daemon.AuthPool.MaxConcurrentRefresh)
+	}
+	if len(loaded.Subscriptions) != 2 {
+		t.Errorf("Loaded Subscriptions has %d entries, want 2", len(loaded.Subscriptions))
+	}
+	if sub, ok := loaded.Subscriptions["claude"]; !ok || sub.MonthlyCost != 200 {
+		t.Errorf("Loaded Subscriptions[claude] = %+v, want monthly_cost 200", sub)
+	}
+}

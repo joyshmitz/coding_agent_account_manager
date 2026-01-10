@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -13,13 +16,19 @@ import (
 // SPMConfig holds Smart Profile Management configuration.
 // This is stored in YAML format at ~/.caam/config.yaml
 type SPMConfig struct {
-	Version   int             `yaml:"version"`
-	Health    HealthConfig    `yaml:"health"`
-	Analytics AnalyticsConfig `yaml:"analytics"`
-	Runtime   RuntimeConfig   `yaml:"runtime"`
-	Project   ProjectConfig   `yaml:"project"`
-	Stealth   StealthConfig   `yaml:"stealth"`
-	Safety    SafetyConfig    `yaml:"safety"`
+	Version       int                        `yaml:"version"`
+	Health        HealthConfig               `yaml:"health"`
+	Analytics     AnalyticsConfig            `yaml:"analytics"`
+	Runtime       RuntimeConfig              `yaml:"runtime"`
+	Project       ProjectConfig              `yaml:"project"`
+	Stealth       StealthConfig              `yaml:"stealth"`
+	Safety        SafetyConfig               `yaml:"safety"`
+	Alerts        AlertConfig                `yaml:"alerts"`
+	Handoff       HandoffConfig              `yaml:"handoff"`
+	RateLimits    RateLimitPatternsConfig    `yaml:"rate_limits"`
+	LoginPatterns LoginPatternsConfig        `yaml:"login_patterns"`
+	Subscriptions map[string]SubscriptionConfig `yaml:"subscriptions,omitempty"`
+	Daemon        DaemonConfig               `yaml:"daemon"`
 }
 
 // HealthConfig contains health and refresh settings.
@@ -40,9 +49,10 @@ type AnalyticsConfig struct {
 
 // RuntimeConfig contains runtime behavior settings.
 type RuntimeConfig struct {
-	FileWatching   bool `yaml:"file_watching"`    // Watch profile directories for changes
-	ReloadOnSIGHUP bool `yaml:"reload_on_sighup"` // Reload config on SIGHUP
-	PIDFile        bool `yaml:"pid_file"`         // Write PID file when running
+	FileWatching   bool   `yaml:"file_watching"`    // Watch profile directories for changes
+	ReloadOnSIGHUP bool   `yaml:"reload_on_sighup"` // Reload config on SIGHUP
+	PIDFile        bool   `yaml:"pid_file"`         // Write PID file when running
+	PIDFilePath    string `yaml:"pid_file_path"`    // Custom path for PID file
 }
 
 // ProjectConfig contains project-profile association settings.
@@ -96,6 +106,71 @@ type SafetyConfig struct {
 	// Older backups beyond this limit are automatically rotated out.
 	// Set to 0 to keep unlimited backups.
 	MaxAutoBackups int `yaml:"max_auto_backups"`
+}
+
+// AlertConfig controls alert and notification settings.
+type AlertConfig struct {
+	Enabled           bool               `yaml:"enabled"`
+	WarningThreshold  int                `yaml:"warning_threshold"`  // Percentage of usage before warning (0-100)
+	CriticalThreshold int                `yaml:"critical_threshold"` // Percentage of usage before critical (0-100)
+	Notifications     NotificationConfig `yaml:"notifications"`
+}
+
+// NotificationConfig controls how alerts are delivered.
+type NotificationConfig struct {
+	Terminal bool   `yaml:"terminal"` // Show alerts in terminal
+	Desktop  bool   `yaml:"desktop"`  // Show desktop notifications (if available)
+	Webhook  string `yaml:"webhook"`  // Optional webhook URL for alerts
+}
+
+// HandoffConfig controls smart session handoff behavior.
+type HandoffConfig struct {
+	AutoTrigger      bool     `yaml:"auto_trigger"`       // Automatically trigger handoff on rate limit
+	DebounceDelay    Duration `yaml:"debounce_delay"`     // Wait before triggering handoff
+	MaxRetries       int      `yaml:"max_retries"`        // Max handoff attempts per session
+	FallbackToManual bool     `yaml:"fallback_to_manual"` // Show manual instructions on failure
+}
+
+// RateLimitPatternsConfig holds rate limit detection patterns per provider.
+type RateLimitPatternsConfig struct {
+	Claude []string `yaml:"claude,omitempty"`
+	Codex  []string `yaml:"codex,omitempty"`
+	Gemini []string `yaml:"gemini,omitempty"`
+}
+
+// LoginPatternsConfig holds login success/failure patterns per provider.
+type LoginPatternsConfig struct {
+	Claude ProviderLoginPatterns `yaml:"claude,omitempty"`
+	Codex  ProviderLoginPatterns `yaml:"codex,omitempty"`
+	Gemini ProviderLoginPatterns `yaml:"gemini,omitempty"`
+}
+
+// ProviderLoginPatterns holds success and failure patterns for a provider.
+type ProviderLoginPatterns struct {
+	Success []string `yaml:"success,omitempty"`
+	Failure []string `yaml:"failure,omitempty"`
+}
+
+// SubscriptionConfig holds subscription cost information for a provider.
+type SubscriptionConfig struct {
+	Plan        string  `yaml:"plan"`         // e.g., "max", "pro", "free"
+	MonthlyCost float64 `yaml:"monthly_cost"` // Monthly cost in USD
+}
+
+// DaemonConfig holds daemon-specific settings.
+type DaemonConfig struct {
+	AuthPool         AuthPoolConfig `yaml:"auth_pool"`
+	CheckInterval    Duration       `yaml:"check_interval"`
+	RefreshThreshold Duration       `yaml:"refresh_threshold"`
+	Verbose          bool           `yaml:"verbose"`
+}
+
+// AuthPoolConfig holds auth pool settings.
+type AuthPoolConfig struct {
+	Enabled               bool     `yaml:"enabled"`
+	MaxConcurrentRefresh  int      `yaml:"max_concurrent_refresh"`
+	RefreshRetryDelay     Duration `yaml:"refresh_retry_delay"`
+	MaxRefreshRetries     int      `yaml:"max_refresh_retries"`
 }
 
 // Duration is a time.Duration that supports YAML marshaling/unmarshaling
@@ -209,6 +284,87 @@ func DefaultSPMConfig() *SPMConfig {
 			AutoBackupBeforeSwitch: "smart", // Backup if state doesn't match any profile
 			MaxAutoBackups:         5,       // Keep last 5 auto-backups
 		},
+		Alerts: AlertConfig{
+			Enabled:           true,
+			WarningThreshold:  70,  // 70% usage triggers warning
+			CriticalThreshold: 85,  // 85% usage triggers critical
+			Notifications: NotificationConfig{
+				Terminal: true,
+				Desktop:  true,
+				Webhook:  "",
+			},
+		},
+		Handoff: HandoffConfig{
+			AutoTrigger:      true,                       // Auto-trigger by default
+			DebounceDelay:    Duration(2 * time.Second),  // Wait 2s before triggering
+			MaxRetries:       1,                          // One retry per session
+			FallbackToManual: true,                       // Show manual instructions on failure
+		},
+		RateLimits: RateLimitPatternsConfig{
+			Claude: []string{
+				"rate limit",
+				"usage limit reached",
+				"too many requests",
+				"429",
+			},
+			Codex: []string{
+				"rate limit exceeded",
+				"quota exceeded",
+				"too many requests",
+			},
+			Gemini: []string{
+				"RESOURCE_EXHAUSTED",
+				"quota exceeded",
+				"rate limit",
+			},
+		},
+		LoginPatterns: LoginPatternsConfig{
+			Claude: ProviderLoginPatterns{
+				Success: []string{
+					"successfully logged in",
+					"authenticated",
+					"login complete",
+				},
+				Failure: []string{
+					"authentication failed",
+					"invalid token",
+					"expired",
+					"login failed",
+				},
+			},
+			Codex: ProviderLoginPatterns{
+				Success: []string{
+					"logged in",
+					"authentication successful",
+				},
+				Failure: []string{
+					"authentication failed",
+					"login failed",
+				},
+			},
+			Gemini: ProviderLoginPatterns{
+				Success: []string{
+					"authenticated",
+					"logged in",
+				},
+				Failure: []string{
+					"authentication failed",
+					"invalid credentials",
+				},
+			},
+		},
+		Subscriptions: nil, // User-configured
+		Daemon: DaemonConfig{
+			AuthPool: AuthPoolConfig{
+				Enabled:              false, // Opt-in
+				MaxConcurrentRefresh: 3,
+				RefreshRetryDelay:    Duration(30 * time.Second),
+				MaxRefreshRetries:    3,
+			},
+			CheckInterval:    Duration(5 * time.Minute),
+			RefreshThreshold: Duration(30 * time.Minute),
+			Verbose:          false,
+		},
 	}
 }
 
@@ -247,6 +403,8 @@ func LoadSPMConfig() (*SPMConfig, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid SPM config: %w", err)
 	}
+
+	config.ApplyEnvOverrides()
 
 	return config, nil
 }
@@ -364,7 +522,181 @@ func (c *SPMConfig) Validate() error {
 		return fmt.Errorf("safety.max_auto_backups cannot be negative")
 	}
 
+	// Alerts validation
+	if c.Alerts.WarningThreshold < 0 || c.Alerts.WarningThreshold > 100 {
+		return fmt.Errorf("alerts.warning_threshold must be between 0 and 100")
+	}
+	if c.Alerts.CriticalThreshold < 0 || c.Alerts.CriticalThreshold > 100 {
+		return fmt.Errorf("alerts.critical_threshold must be between 0 and 100")
+	}
+	if c.Alerts.WarningThreshold > c.Alerts.CriticalThreshold {
+		return fmt.Errorf("alerts.warning_threshold should be <= critical_threshold")
+	}
+
+	// Handoff validation
+	if c.Handoff.DebounceDelay.Duration() < 0 {
+		return fmt.Errorf("handoff.debounce_delay cannot be negative")
+	}
+	if c.Handoff.MaxRetries < 0 {
+		return fmt.Errorf("handoff.max_retries cannot be negative")
+	}
+
+	// Daemon validation
+	if c.Daemon.CheckInterval.Duration() < 0 {
+		return fmt.Errorf("daemon.check_interval cannot be negative")
+	}
+	if c.Daemon.RefreshThreshold.Duration() < 0 {
+		return fmt.Errorf("daemon.refresh_threshold cannot be negative")
+	}
+	if c.Daemon.AuthPool.MaxConcurrentRefresh < 0 {
+		return fmt.Errorf("daemon.auth_pool.max_concurrent_refresh cannot be negative")
+	}
+	if c.Daemon.AuthPool.RefreshRetryDelay.Duration() < 0 {
+		return fmt.Errorf("daemon.auth_pool.refresh_retry_delay cannot be negative")
+	}
+	if c.Daemon.AuthPool.MaxRefreshRetries < 0 {
+		return fmt.Errorf("daemon.auth_pool.max_refresh_retries cannot be negative")
+	}
+
+	// Subscription validation
+	for name, sub := range c.Subscriptions {
+		if sub.MonthlyCost < 0 {
+			return fmt.Errorf("subscriptions.%s.monthly_cost cannot be negative", name)
+		}
+	}
+
+	// Pattern validation
+	if err := validatePatterns("rate_limits.claude", c.RateLimits.Claude); err != nil {
+		return err
+	}
+	if err := validatePatterns("rate_limits.codex", c.RateLimits.Codex); err != nil {
+		return err
+	}
+	if err := validatePatterns("rate_limits.gemini", c.RateLimits.Gemini); err != nil {
+		return err
+	}
+
+	if err := validateLoginPatterns("login_patterns.claude", c.LoginPatterns.Claude); err != nil {
+		return err
+	}
+	if err := validateLoginPatterns("login_patterns.codex", c.LoginPatterns.Codex); err != nil {
+		return err
+	}
+	if err := validateLoginPatterns("login_patterns.gemini", c.LoginPatterns.Gemini); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func validatePatterns(path string, patterns []string) error {
+	for i, p := range patterns {
+		if _, err := regexp.Compile(p); err != nil {
+			return fmt.Errorf("invalid regex in %s[%d]: %q: %w", path, i, p, err)
+		}
+	}
+	return nil
+}
+
+func validateLoginPatterns(path string, p ProviderLoginPatterns) error {
+	if err := validatePatterns(path+".success", p.Success); err != nil {
+		return err
+	}
+	if err := validatePatterns(path+".failure", p.Failure); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ApplyEnvOverrides updates the config with environment variables.
+func (c *SPMConfig) ApplyEnvOverrides() {
+	// Alerts
+	if v := os.Getenv("CAAM_ALERTS_ENABLED"); v != "" {
+		if b, err := parseBool(v); err == nil {
+			c.Alerts.Enabled = b
+		}
+	}
+	if v := os.Getenv("CAAM_ALERTS_WARNING_THRESHOLD"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			c.Alerts.WarningThreshold = i
+		}
+	}
+	if v := os.Getenv("CAAM_ALERTS_CRITICAL_THRESHOLD"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			c.Alerts.CriticalThreshold = i
+		}
+	}
+	if v := os.Getenv("CAAM_ALERTS_NOTIFICATIONS_TERMINAL"); v != "" {
+		if b, err := parseBool(v); err == nil {
+			c.Alerts.Notifications.Terminal = b
+		}
+	}
+	if v := os.Getenv("CAAM_ALERTS_NOTIFICATIONS_DESKTOP"); v != "" {
+		if b, err := parseBool(v); err == nil {
+			c.Alerts.Notifications.Desktop = b
+		}
+	}
+	if v := os.Getenv("CAAM_ALERTS_NOTIFICATIONS_WEBHOOK"); v != "" {
+		c.Alerts.Notifications.Webhook = v
+	}
+
+	// Handoff
+	if v := os.Getenv("CAAM_HANDOFF_AUTO_TRIGGER"); v != "" {
+		if b, err := parseBool(v); err == nil {
+			c.Handoff.AutoTrigger = b
+		}
+	}
+	if v := os.Getenv("CAAM_HANDOFF_DEBOUNCE_DELAY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.Handoff.DebounceDelay = Duration(d)
+		}
+	}
+	if v := os.Getenv("CAAM_HANDOFF_MAX_RETRIES"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			c.Handoff.MaxRetries = i
+		}
+	}
+	if v := os.Getenv("CAAM_HANDOFF_FALLBACK_TO_MANUAL"); v != "" {
+		if b, err := parseBool(v); err == nil {
+			c.Handoff.FallbackToManual = b
+		}
+	}
+
+	// Daemon
+	if v := os.Getenv("CAAM_DAEMON_CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.Daemon.CheckInterval = Duration(d)
+		}
+	}
+	if v := os.Getenv("CAAM_DAEMON_REFRESH_THRESHOLD"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.Daemon.RefreshThreshold = Duration(d)
+		}
+	}
+	if v := os.Getenv("CAAM_DAEMON_VERBOSE"); v != "" {
+		if b, err := parseBool(v); err == nil {
+			c.Daemon.Verbose = b
+		}
+	}
+	
+	// Health
+	if v := os.Getenv("CAAM_HEALTH_REFRESH_THRESHOLD"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.Health.RefreshThreshold = Duration(d)
+		}
+	}
+}
+
+// parseBool parses various boolean representations.
+func parseBool(s string) (bool, error) {
+	switch strings.ToLower(s) {
+	case "true", "yes", "1", "on":
+		return true, nil
+	case "false", "no", "0", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean: %s (use true/false, yes/no, 1/0)", s)
+	}
 }
 
 // GetRefreshThreshold returns the token refresh threshold.
