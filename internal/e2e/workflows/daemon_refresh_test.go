@@ -26,7 +26,7 @@ func TestDaemonRefresh(t *testing.T) {
 	_ = os.Remove(pidFile)
 	
 	// Setup vault
-	vaultDir := filepath.Join(rootDir, "vault")
+	vaultDir := filepath.Join(rootDir, "caam", "vault")
 	h.SetEnv("XDG_DATA_HOME", rootDir)
 	
 	// Create a profile with an expiring token
@@ -37,11 +37,9 @@ func TestDaemonRefresh(t *testing.T) {
 	// Create .claude.json with expiry 5 mins from now (default threshold is 30m)
 	expiring := time.Now().Add(5 * time.Minute).Format(time.RFC3339)
 	authContent := fmt.Sprintf(`{
-		"claudeAiOauth": {
-			"accessToken": "old-token",
-			"refreshToken": "refresh-me",
-			"expiresAt": "%s"
-		}
+		"accessToken": "old-token",
+		"refreshToken": "refresh-me",
+		"expiresAt": "%s"
 	}`, expiring)
 	// Note: expiresAt in json is actually int64 (millis) usually in modern format, but string in some?
 	// internal/refresh/claude.go handles response which has int or string.
