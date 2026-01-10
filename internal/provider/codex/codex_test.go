@@ -2,9 +2,11 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
@@ -572,5 +574,183 @@ func TestFullProfileLifecycle(t *testing.T) {
 	status, _ = p.Status(context.Background(), prof)
 	if status.LoggedIn {
 		t.Error("should not be logged in after logout")
+	}
+}
+
+
+// =============================================================================
+// DetectExistingAuth Tests
+// =============================================================================
+
+func TestDetectExistingAuth(t *testing.T) {
+	setupEnv := func(t *testing.T) string {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		return home
+	}
+
+	t.Run("detects ~/.codex/auth.json (default)", func(t *testing.T) {
+		home := setupEnv(t)
+		p := New()
+
+		codexDir := filepath.Join(home, ".codex")
+		os.MkdirAll(codexDir, 0700)
+		authPath := filepath.Join(codexDir, "auth.json")
+
+		data := map[string]interface{}{"access_token": "valid"}
+		writeJSON(t, authPath, data)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary == nil || detection.Primary.Path != authPath {
+			t.Errorf("Primary path = %v, want %v", detection.Primary, authPath)
+		}
+	})
+
+	t.Run("detects CODEX_HOME/auth.json", func(t *testing.T) {
+		setupEnv(t) // just to be safe
+		customHome := t.TempDir()
+		t.Setenv("CODEX_HOME", customHome)
+		p := New()
+
+		authPath := filepath.Join(customHome, "auth.json")
+		data := map[string]interface{}{"access_token": "valid"}
+		writeJSON(t, authPath, data)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != authPath {
+			t.Errorf("Primary path = %v, want %v", detection.Primary.Path, authPath)
+		}
+	})
+
+	t.Run("validates JSON fields", func(t *testing.T) {
+		home := setupEnv(t)
+		p := New()
+
+		codexDir := filepath.Join(home, ".codex")
+		os.MkdirAll(codexDir, 0700)
+		authPath := filepath.Join(codexDir, "auth.json")
+
+		// Invalid JSON
+		os.WriteFile(authPath, []byte("{invalid"), 0600)
+		detection, _ := p.DetectExistingAuth()
+		if detection.Locations[0].IsValid {
+			t.Error("Should be invalid (json error)")
+		}
+
+		// Valid JSON but missing token
+		writeJSON(t, authPath, map[string]interface{}{"foo": "bar"})
+		detection, _ = p.DetectExistingAuth()
+		if detection.Locations[0].IsValid {
+			t.Error("Should be invalid (missing token)")
+		}
+
+		// Valid fields
+		validFields := []string{"access_token", "accessToken", "api_key", "token"}
+		for _, field := range validFields {
+			writeJSON(t, authPath, map[string]interface{}{field: "val"})
+			detection, _ = p.DetectExistingAuth()
+			if !detection.Locations[0].IsValid {
+				t.Errorf("Should be valid with field %s", field)
+			}
+		}
+	})
+
+	t.Run("prioritizes recent file", func(t *testing.T) {
+		home := setupEnv(t)
+		customHome := t.TempDir()
+		t.Setenv("CODEX_HOME", customHome)
+		p := New()
+
+		// Old file in default location
+		defaultDir := filepath.Join(home, ".codex")
+		os.MkdirAll(defaultDir, 0700)
+		defaultPath := filepath.Join(defaultDir, "auth.json")
+		writeJSON(t, defaultPath, map[string]interface{}{"token": "old"})
+		os.Chtimes(defaultPath, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour))
+
+		// New file in custom location
+		customPath := filepath.Join(customHome, "auth.json")
+		writeJSON(t, customPath, map[string]interface{}{"token": "new"})
+		os.Chtimes(customPath, time.Now(), time.Now())
+
+		detection, _ := p.DetectExistingAuth()
+		if detection.Primary.Path != customPath {
+			t.Errorf("Should pick custom path (newer). Got %s", detection.Primary.Path)
+		}
+		if detection.Warning == "" {
+			t.Error("Should warn about multiple files")
+		}
+	})
+}
+
+// =============================================================================
+// ImportAuth Tests
+// =============================================================================
+
+func TestImportAuth(t *testing.T) {
+	t.Run("imports auth.json", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{
+			Name:     "test",
+			Provider: "codex",
+			BasePath: tmpDir,
+		}
+		p := New()
+		p.PrepareProfile(context.Background(), prof)
+
+		srcDir := t.TempDir()
+		srcPath := filepath.Join(srcDir, "auth.json")
+		writeJSON(t, srcPath, map[string]interface{}{"token": "val"})
+
+		copied, err := p.ImportAuth(context.Background(), srcPath, prof)
+		if err != nil {
+			t.Fatalf("ImportAuth error: %v", err)
+		}
+
+		if len(copied) != 1 {
+			t.Fatalf("Expected 1 file, got %d", len(copied))
+		}
+		expected := filepath.Join(prof.CodexHomePath(), "auth.json")
+		if copied[0] != expected {
+			t.Errorf("Copied to %s, want %s", copied[0], expected)
+		}
+		if _, err := os.Stat(expected); os.IsNotExist(err) {
+			t.Error("Target file not created")
+		}
+	})
+
+	t.Run("fails if source missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{Name: "test", BasePath: tmpDir}
+		p := New()
+		_, err := p.ImportAuth(context.Background(), "/missing", prof)
+		if err == nil {
+			t.Error("Should fail")
+		}
+	})
+}
+
+func writeJSON(t *testing.T, path string, data interface{}) {
+	t.Helper()
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
 	}
 }

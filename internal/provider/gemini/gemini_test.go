@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -940,5 +941,257 @@ func TestFullVertexADCLifecycle(t *testing.T) {
 	env, _ := p.Env(context.Background(), prof)
 	if env["CLOUDSDK_CONFIG"] != gcloudDir {
 		t.Errorf("CLOUDSDK_CONFIG = %q, want %q", env["CLOUDSDK_CONFIG"], gcloudDir)
+	}
+}
+
+
+// =============================================================================
+// DetectExistingAuth Tests
+// =============================================================================
+
+func TestDetectExistingAuth(t *testing.T) {
+	setupEnv := func(t *testing.T) (string, string) {
+		home := t.TempDir()
+		xdg := filepath.Join(home, ".config")
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		return home, xdg
+	}
+
+	t.Run("detects settings.json (OAuth)", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		geminiDir := filepath.Join(home, ".gemini")
+		os.MkdirAll(geminiDir, 0700)
+		path := filepath.Join(geminiDir, "settings.json")
+		writeJSON(t, path, map[string]interface{}{"oauth": map[string]interface{}{}})
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary path = %v, want %v", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("detects oauth_credentials.json", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		geminiDir := filepath.Join(home, ".gemini")
+		os.MkdirAll(geminiDir, 0700)
+		path := filepath.Join(geminiDir, "oauth_credentials.json")
+		writeJSON(t, path, map[string]interface{}{"access_token": "valid"})
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary path = %v, want %v", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("detects .env (API Key)", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		geminiDir := filepath.Join(home, ".gemini")
+		os.MkdirAll(geminiDir, 0700)
+		path := filepath.Join(geminiDir, ".env")
+		os.WriteFile(path, []byte("GEMINI_API_KEY=test"), 0600)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary path = %v, want %v", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("detects ADC credentials (Vertex)", func(t *testing.T) {
+		_, xdg := setupEnv(t)
+		p := New()
+
+		gcloudDir := filepath.Join(xdg, "gcloud")
+		os.MkdirAll(gcloudDir, 0700)
+		path := filepath.Join(gcloudDir, "application_default_credentials.json")
+		writeJSON(t, path, map[string]interface{}{"client_id": "test", "type": "authorized_user"})
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary path = %v, want %v", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("detects GEMINI_HOME locations", func(t *testing.T) {
+		setupEnv(t)
+		customHome := t.TempDir()
+		t.Setenv("GEMINI_HOME", customHome)
+		p := New()
+
+		path := filepath.Join(customHome, "settings.json")
+		writeJSON(t, path, map[string]interface{}{"oauth": map[string]interface{}{}})
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary path = %v, want %v", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("validates file content", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+		geminiDir := filepath.Join(home, ".gemini")
+		os.MkdirAll(geminiDir, 0700)
+
+		// Invalid JSON settings
+		path := filepath.Join(geminiDir, "settings.json")
+		os.WriteFile(path, []byte("{invalid"), 0600)
+		detection, _ := p.DetectExistingAuth()
+		if detection.Locations[0].IsValid {
+			t.Error("Should be invalid settings.json")
+		}
+
+		// Invalid .env
+		envPath := filepath.Join(geminiDir, ".env")
+		os.WriteFile(envPath, []byte("FOO=BAR"), 0600)
+		detection, _ = p.DetectExistingAuth()
+		// .env location index depends on list order, checking all
+		for _, loc := range detection.Locations {
+			if filepath.Base(loc.Path) == ".env" && loc.IsValid {
+				t.Error("Should be invalid .env")
+			}
+		}
+	})
+}
+
+// =============================================================================
+// ImportAuth Tests
+// =============================================================================
+
+func TestImportAuth(t *testing.T) {
+	t.Run("imports settings.json", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{
+			Name:     "test",
+			Provider: "gemini",
+			BasePath: tmpDir,
+		}
+		p := New()
+		p.PrepareProfile(context.Background(), prof)
+
+		// Source from .gemini structure
+		srcDir := t.TempDir()
+		srcGemini := filepath.Join(srcDir, ".gemini")
+		os.MkdirAll(srcGemini, 0700)
+		srcPath := filepath.Join(srcGemini, "settings.json")
+		writeJSON(t, srcPath, map[string]interface{}{"oauth": true})
+
+		copied, err := p.ImportAuth(context.Background(), srcPath, prof)
+		if err != nil {
+			t.Fatalf("ImportAuth error: %v", err)
+		}
+
+		expected := filepath.Join(prof.HomePath(), ".gemini", "settings.json")
+		if copied[0] != expected {
+			t.Errorf("Copied to %s, want %s", copied[0], expected)
+		}
+	})
+
+	t.Run("imports ADC credentials", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{
+			Name:     "test",
+			Provider: "gemini",
+			AuthMode: "vertex_adc", // Important for PrepareProfile to create gcloud dir
+			BasePath: tmpDir,
+		}
+		p := New()
+		p.PrepareProfile(context.Background(), prof)
+
+		// Source from gcloud structure
+		srcDir := t.TempDir()
+		srcGcloud := filepath.Join(srcDir, "gcloud")
+		os.MkdirAll(srcGcloud, 0700)
+		srcPath := filepath.Join(srcGcloud, "application_default_credentials.json")
+		writeJSON(t, srcPath, map[string]interface{}{"type": "authorized_user"})
+
+		copied, err := p.ImportAuth(context.Background(), srcPath, prof)
+		if err != nil {
+			t.Fatalf("ImportAuth error: %v", err)
+		}
+
+		expected := filepath.Join(prof.BasePath, "gcloud", "application_default_credentials.json")
+		if copied[0] != expected {
+			t.Errorf("Copied to %s, want %s", copied[0], expected)
+		}
+	})
+
+	t.Run("imports .env", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{
+			Name:     "test",
+			Provider: "gemini",
+			BasePath: tmpDir,
+		}
+		p := New()
+		p.PrepareProfile(context.Background(), prof)
+
+		srcDir := t.TempDir()
+		srcGemini := filepath.Join(srcDir, ".gemini")
+		os.MkdirAll(srcGemini, 0700)
+		srcPath := filepath.Join(srcGemini, ".env")
+		os.WriteFile(srcPath, []byte("KEY=val"), 0600)
+
+		copied, err := p.ImportAuth(context.Background(), srcPath, prof)
+		if err != nil {
+			t.Fatalf("ImportAuth error: %v", err)
+		}
+
+		expected := filepath.Join(prof.HomePath(), ".gemini", ".env")
+		if copied[0] != expected {
+			t.Errorf("Copied to %s, want %s", copied[0], expected)
+		}
+	})
+}
+
+func writeJSON(t *testing.T, path string, data interface{}) {
+	t.Helper()
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
 	}
 }

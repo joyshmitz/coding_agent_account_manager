@@ -2,10 +2,12 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
@@ -866,5 +868,285 @@ func TestAPIKeyModeLifecycle(t *testing.T) {
 	// Validate should pass
 	if err := p.ValidateProfile(context.Background(), prof); err != nil {
 		t.Errorf("ValidateProfile() error = %v", err)
+	}
+}
+
+
+// =============================================================================
+// DetectExistingAuth Tests
+// =============================================================================
+
+func TestDetectExistingAuth(t *testing.T) {
+	// Helper to set up fake home and config
+	setupEnv := func(t *testing.T) (string, string) {
+		home := t.TempDir()
+		xdg := filepath.Join(home, ".config")
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		return home, xdg
+	}
+
+	t.Run("detects .credentials.json (primary)", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		// Create .claude directory
+		claudeDir := filepath.Join(home, ".claude")
+		os.MkdirAll(claudeDir, 0700)
+
+		// Create valid credentials file
+		credsPath := filepath.Join(claudeDir, ".credentials.json")
+		credsData := map[string]interface{}{
+			"claudeAiOauth": map[string]interface{}{
+				"accessToken": "valid-token",
+				"expiresAt":   time.Now().Add(time.Hour).UnixMilli(),
+			},
+		}
+		writeJSON(t, credsPath, credsData)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary == nil {
+			t.Fatal("Primary should not be nil")
+		}
+		if detection.Primary.Path != credsPath {
+			t.Errorf("Primary.Path = %q, want %q", detection.Primary.Path, credsPath)
+		}
+		if !detection.Primary.IsValid {
+			t.Error("Primary should be valid")
+		}
+	})
+
+	t.Run("detects .claude.json (legacy)", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		// Create valid .claude.json
+		path := filepath.Join(home, ".claude.json")
+		data := map[string]interface{}{
+			"oauthToken": "valid-token",
+		}
+		writeJSON(t, path, data)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary.Path = %q, want %q", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("detects auth.json (xdg)", func(t *testing.T) {
+		_, xdg := setupEnv(t)
+		p := New()
+
+		// Create claude-code directory
+		dir := filepath.Join(xdg, "claude-code")
+		os.MkdirAll(dir, 0700)
+
+		// Create valid auth.json
+		path := filepath.Join(dir, "auth.json")
+		data := map[string]interface{}{
+			"accessToken": "valid-token",
+		}
+		writeJSON(t, path, data)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary.Path = %q, want %q", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("detects settings.json (api key)", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		dir := filepath.Join(home, ".claude")
+		os.MkdirAll(dir, 0700)
+
+		path := filepath.Join(dir, "settings.json")
+		data := map[string]interface{}{
+			"apiKeyHelper": "/path/to/helper",
+		}
+		writeJSON(t, path, data)
+
+		detection, err := p.DetectExistingAuth()
+		if err != nil {
+			t.Fatalf("DetectExistingAuth() error = %v", err)
+		}
+
+		if !detection.Found {
+			t.Error("Should have found auth")
+		}
+		if detection.Primary.Path != path {
+			t.Errorf("Primary.Path = %q, want %q", detection.Primary.Path, path)
+		}
+	})
+
+	t.Run("prioritizes most recent file", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		// Create older .claude.json
+		oldPath := filepath.Join(home, ".claude.json")
+		writeJSON(t, oldPath, map[string]interface{}{"oauthToken": "old"})
+		os.Chtimes(oldPath, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour))
+
+		// Create newer .credentials.json
+		dir := filepath.Join(home, ".claude")
+		os.MkdirAll(dir, 0700)
+		newPath := filepath.Join(dir, ".credentials.json")
+		writeJSON(t, newPath, map[string]interface{}{
+			"claudeAiOauth": map[string]interface{}{"accessToken": "new"},
+		})
+		// Ensure it's newer
+		os.Chtimes(newPath, time.Now(), time.Now())
+
+		detection, _ := p.DetectExistingAuth()
+		if detection.Primary.Path != newPath {
+			t.Errorf("Should prioritize newer file. Got %q, want %q", detection.Primary.Path, newPath)
+		}
+		if detection.Warning == "" {
+			t.Error("Should have warning about multiple files")
+		}
+	})
+
+	t.Run("validates JSON structure", func(t *testing.T) {
+		home, _ := setupEnv(t)
+		p := New()
+
+		// Create invalid JSON file
+		path := filepath.Join(home, ".claude.json")
+		os.WriteFile(path, []byte("{invalid-json"), 0600)
+
+		detection, _ := p.DetectExistingAuth()
+		if len(detection.Locations) == 0 {
+			t.Fatal("Should detect file existence")
+		}
+
+		loc := detection.Locations[1] // .claude.json is 2nd in list
+		if loc.IsValid {
+			t.Error("Should mark invalid JSON as invalid")
+		}
+		if loc.ValidationError == "" {
+			t.Error("Should have validation error")
+		}
+	})
+}
+
+// =============================================================================
+// ImportAuth Tests
+// =============================================================================
+
+func TestImportAuth(t *testing.T) {
+	t.Run("imports .credentials.json", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{
+			Name:     "test",
+			Provider: "claude",
+			BasePath: tmpDir,
+		}
+		p := New()
+		p.PrepareProfile(context.Background(), prof)
+
+		// Create source file
+		srcDir := t.TempDir()
+		srcPath := filepath.Join(srcDir, ".credentials.json")
+		writeJSON(t, srcPath, map[string]string{"key": "value"})
+
+		copied, err := p.ImportAuth(context.Background(), srcPath, prof)
+		if err != nil {
+			t.Fatalf("ImportAuth() error = %v", err)
+		}
+
+		if len(copied) != 1 {
+			t.Fatalf("Expected 1 copied file, got %d", len(copied))
+		}
+
+		expectedPath := filepath.Join(prof.HomePath(), ".claude", ".credentials.json")
+		if copied[0] != expectedPath {
+			t.Errorf("Copied path = %q, want %q", copied[0], expectedPath)
+		}
+
+		if !fileExists(expectedPath) {
+			t.Error("Target file not created")
+		}
+	})
+
+	t.Run("imports auth.json to xdg location", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{
+			Name:     "test",
+			Provider: "claude",
+			BasePath: tmpDir,
+		}
+		p := New()
+		p.PrepareProfile(context.Background(), prof)
+
+		srcDir := t.TempDir()
+		srcPath := filepath.Join(srcDir, "auth.json")
+		writeJSON(t, srcPath, map[string]string{"key": "value"})
+
+		copied, err := p.ImportAuth(context.Background(), srcPath, prof)
+		if err != nil {
+			t.Fatalf("ImportAuth() error = %v", err)
+		}
+
+		expectedPath := filepath.Join(prof.XDGConfigPath(), "claude-code", "auth.json")
+		if copied[0] != expectedPath {
+			t.Errorf("Copied path = %q, want %q", copied[0], expectedPath)
+		}
+	})
+
+	t.Run("fails if source missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{Name: "test", BasePath: tmpDir}
+		p := New()
+
+		_, err := p.ImportAuth(context.Background(), "/non/existent/file", prof)
+		if err == nil {
+			t.Error("Should fail for missing source")
+		}
+	})
+
+	t.Run("fails if source is directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		prof := &profile.Profile{Name: "test", BasePath: tmpDir}
+		p := New()
+
+		_, err := p.ImportAuth(context.Background(), tmpDir, prof)
+		if err == nil {
+			t.Error("Should fail if source is directory")
+		}
+	})
+}
+
+// Helper for writing JSON
+func writeJSON(t *testing.T, path string, data interface{}) {
+	t.Helper()
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
 	}
 }
