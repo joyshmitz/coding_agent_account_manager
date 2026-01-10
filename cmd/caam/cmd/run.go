@@ -19,6 +19,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// getWd allows mocking os.Getwd in tests
+var getWd = os.Getwd
+
 // runCmd wraps AI CLI execution with automatic rate limit handling.
 var runCmd = &cobra.Command{
 	Use:   "run <tool> [-- args...]",
@@ -150,7 +153,7 @@ func runWrap(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get working directory
-	cwd, err := os.Getwd()
+	cwd, err := getWd()
 	if err == nil {
 		cfg.WorkDir = cwd
 	}

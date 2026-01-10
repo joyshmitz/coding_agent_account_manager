@@ -8,11 +8,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/ratelimit"
 )
 
 // Runner executes AI CLI tools with profile isolation.
@@ -44,6 +46,14 @@ type RunOptions struct {
 
 	// Env are additional environment variables.
 	Env map[string]string
+
+	// OnRateLimit is called when a rate limit is detected in command output.
+	// It is invoked asynchronously and at most once per run.
+	OnRateLimit func(ctx context.Context) error
+
+	// RateLimitDelay debounces the rate limit callback to avoid rapid triggers.
+	// If zero, the callback fires immediately.
+	RateLimitDelay time.Duration
 }
 
 // Run executes the AI CLI tool with profile isolation.
@@ -69,7 +79,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	// Set up environment with deduplication (last one wins in our map logic)
 	envMap := make(map[string]string)
-	
+
 	// 1. Start with inherited environment
 	for _, e := range os.Environ() {
 		parts := strings.SplitN(e, "=", 2)
@@ -101,10 +111,64 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	var capture *codexSessionCapture
 	var stdoutObserver, stderrObserver *lineObserverWriter
+	var rateObserver func(line string)
 	if opts.Provider.ID() == "codex" {
 		capture = &codexSessionCapture{}
-		stdoutObserver = newLineObserverWriter(os.Stdout, capture.ObserveLine)
-		stderrObserver = newLineObserverWriter(os.Stderr, capture.ObserveLine)
+	}
+
+	if opts.OnRateLimit != nil {
+		detector, err := ratelimit.NewDetector(ratelimit.ProviderFromString(opts.Provider.ID()), nil)
+		if err != nil {
+			return fmt.Errorf("create rate limit detector: %w", err)
+		}
+
+		var once sync.Once
+		trigger := func() {
+			once.Do(func() {
+				invoke := func() {
+					if err := opts.OnRateLimit(ctx); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: rate limit callback failed: %v\n", err)
+					}
+				}
+				if opts.RateLimitDelay <= 0 {
+					go invoke()
+					return
+				}
+				go func() {
+					timer := time.NewTimer(opts.RateLimitDelay)
+					defer timer.Stop()
+					select {
+					case <-ctx.Done():
+						return
+					case <-timer.C:
+						invoke()
+					}
+				}()
+			})
+		}
+
+		rateObserver = func(line string) {
+			if detector.Check(line) {
+				trigger()
+			}
+		}
+	}
+
+	var observers []func(string)
+	if capture != nil {
+		observers = append(observers, capture.ObserveLine)
+	}
+	if rateObserver != nil {
+		observers = append(observers, rateObserver)
+	}
+	if len(observers) > 0 {
+		onLine := func(line string) {
+			for _, obs := range observers {
+				obs(line)
+			}
+		}
+		stdoutObserver = newLineObserverWriter(os.Stdout, onLine)
+		stderrObserver = newLineObserverWriter(os.Stderr, onLine)
 	}
 
 	// Connect stdio

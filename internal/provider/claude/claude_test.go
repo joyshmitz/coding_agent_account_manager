@@ -84,48 +84,61 @@ func TestSupportedAuthModes(t *testing.T) {
 // =============================================================================
 
 func TestAuthFiles(t *testing.T) {
-	t.Run("returns three auth file specs", func(t *testing.T) {
+	t.Run("returns four auth file specs", func(t *testing.T) {
 		p := New()
 		files := p.AuthFiles()
 
-		if len(files) != 3 {
-			t.Fatalf("AuthFiles() returned %d files, want 3", len(files))
+		if len(files) != 4 {
+			t.Fatalf("AuthFiles() returned %d files, want 4", len(files))
 		}
 	})
 
-	t.Run("first file is .claude.json and required", func(t *testing.T) {
+	t.Run("first file is .credentials.json and required", func(t *testing.T) {
 		p := New()
 		files := p.AuthFiles()
 
 		file := files[0]
-		if !strings.HasSuffix(file.Path, ".claude.json") {
-			t.Errorf("AuthFiles()[0].Path = %q, should end with .claude.json", file.Path)
+		if !strings.HasSuffix(file.Path, filepath.Join(".claude", ".credentials.json")) {
+			t.Errorf("AuthFiles()[0].Path = %q, should end with .claude/.credentials.json", file.Path)
 		}
 		if !file.Required {
-			t.Error(".claude.json should be required")
+			t.Error(".credentials.json should be required")
 		}
 	})
 
-	t.Run("second file is auth.json and optional", func(t *testing.T) {
+	t.Run("second file is .claude.json and optional", func(t *testing.T) {
 		p := New()
 		files := p.AuthFiles()
 
 		file := files[1]
+		if !strings.HasSuffix(file.Path, ".claude.json") {
+			t.Errorf("AuthFiles()[1].Path = %q, should end with .claude.json", file.Path)
+		}
+		if file.Required {
+			t.Error(".claude.json should be optional")
+		}
+	})
+
+	t.Run("third file is auth.json and optional", func(t *testing.T) {
+		p := New()
+		files := p.AuthFiles()
+
+		file := files[2]
 		if !strings.HasSuffix(file.Path, "claude-code/auth.json") {
-			t.Errorf("AuthFiles()[1].Path = %q, should end with claude-code/auth.json", file.Path)
+			t.Errorf("AuthFiles()[2].Path = %q, should end with claude-code/auth.json", file.Path)
 		}
 		if file.Required {
 			t.Error("claude-code/auth.json should be optional")
 		}
 	})
 
-	t.Run("third file is settings.json and optional", func(t *testing.T) {
+	t.Run("fourth file is settings.json and optional", func(t *testing.T) {
 		p := New()
 		files := p.AuthFiles()
 
-		file := files[2]
+		file := files[3]
 		if !strings.HasSuffix(file.Path, filepath.Join(".claude", "settings.json")) {
-			t.Errorf("AuthFiles()[2].Path = %q, should end with .claude/settings.json", file.Path)
+			t.Errorf("AuthFiles()[3].Path = %q, should end with .claude/settings.json", file.Path)
 		}
 		if file.Required {
 			t.Error(".claude/settings.json should be optional")
@@ -141,8 +154,8 @@ func TestAuthFiles(t *testing.T) {
 		files := p.AuthFiles()
 
 		expected := "/custom/config/claude-code/auth.json"
-		if files[1].Path != expected {
-			t.Errorf("AuthFiles()[1].Path = %q, want %q", files[1].Path, expected)
+		if files[2].Path != expected {
+			t.Errorf("AuthFiles()[2].Path = %q, want %q", files[2].Path, expected)
 		}
 	})
 
@@ -156,8 +169,8 @@ func TestAuthFiles(t *testing.T) {
 
 		homeDir, _ := os.UserHomeDir()
 		expected := filepath.Join(homeDir, ".config", "claude-code", "auth.json")
-		if files[1].Path != expected {
-			t.Errorf("AuthFiles()[1].Path = %q, want %q", files[1].Path, expected)
+		if files[2].Path != expected {
+			t.Errorf("AuthFiles()[2].Path = %q, want %q", files[2].Path, expected)
 		}
 	})
 }

@@ -25,6 +25,9 @@ import (
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/rotation"
 )
 
+// ExecCommand allows mocking exec.CommandContext in tests
+var ExecCommand = exec.CommandContext
+
 // Config holds configuration for the wrapper.
 type Config struct {
 	// Provider is the AI CLI provider (claude, codex, gemini).
@@ -320,7 +323,7 @@ func (w *Wrapper) Run(ctx context.Context) *Result {
 // Returns exit code, whether rate limit was hit, and any error.
 func (w *Wrapper) runOnce(ctx context.Context, profile string) (int, bool, error) {
 	// Get auth file set for this provider
-	fileSet, ok := authFileSetForProvider(w.config.Provider)
+	fileSet, ok := AuthFileSetForProvider(w.config.Provider)
 	if !ok {
 		return 1, false, fmt.Errorf("unknown provider: %s", w.config.Provider)
 	}
@@ -341,7 +344,7 @@ func (w *Wrapper) runOnce(ctx context.Context, profile string) (int, bool, error
 
 	// Build command
 	bin := binForProvider(w.config.Provider)
-	cmd := exec.CommandContext(ctx, bin, w.config.Args...)
+	cmd := ExecCommand(ctx, bin, w.config.Args...)
 
 	if w.config.WorkDir != "" {
 		cmd.Dir = w.config.WorkDir
@@ -451,8 +454,8 @@ func (t *teeWriter) Flush() {
 	}
 }
 
-// authFileSetForProvider returns the auth file set for a provider.
-func authFileSetForProvider(provider string) (authfile.AuthFileSet, bool) {
+// AuthFileSetForProvider allows mocking auth file set lookup in tests
+var AuthFileSetForProvider = func(provider string) (authfile.AuthFileSet, bool) {
 	switch provider {
 	case "codex":
 		return authfile.CodexAuthFiles(), true

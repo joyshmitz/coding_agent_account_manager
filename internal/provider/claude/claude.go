@@ -4,7 +4,8 @@
 // - First use: run `claude`, then authenticate via `/login` inside the interactive session.
 // - `/login` is also the documented way to switch accounts.
 // - Auth state stored in:
-//   - ~/.claude.json (main OAuth session state)
+//   - ~/.claude/.credentials.json (primary OAuth credentials)
+//   - ~/.claude.json (legacy OAuth session state)
 //   - ~/.config/claude-code/auth.json (auth credentials)
 //   - ~/.claude/settings.json (user settings)
 //   - Project .claude/* files
@@ -89,9 +90,14 @@ func (p *Provider) AuthFiles() []provider.AuthFileSpec {
 
 	return []provider.AuthFileSpec{
 		{
-			Path:        filepath.Join(homeDir, ".claude.json"),
-			Description: "Claude Code OAuth session state (Claude Max subscription)",
+			Path:        filepath.Join(homeDir, ".claude", ".credentials.json"),
+			Description: "Claude Code OAuth credentials (Claude Max subscription)",
 			Required:    true,
+		},
+		{
+			Path:        filepath.Join(homeDir, ".claude.json"),
+			Description: "Claude Code OAuth session state (legacy location)",
+			Required:    false,
 		},
 		{
 			Path:        filepath.Join(xdgConfigHome(), "claude-code", "auth.json"),
@@ -296,6 +302,7 @@ func (p *Provider) Logout(ctx context.Context, prof *profile.Profile) error {
 	authPaths := []string{
 		filepath.Join(prof.XDGConfigPath(), "claude-code", "auth.json"),
 		filepath.Join(prof.HomePath(), ".claude.json"),
+		filepath.Join(prof.HomePath(), ".claude", ".credentials.json"),
 		filepath.Join(prof.HomePath(), ".claude", "settings.json"),
 	}
 
@@ -323,6 +330,12 @@ func (p *Provider) Status(ctx context.Context, prof *profile.Profile) (*provider
 	// Also check .claude.json for OAuth state
 	claudeJsonPath := filepath.Join(prof.HomePath(), ".claude.json")
 	if _, err := os.Stat(claudeJsonPath); err == nil {
+		status.LoggedIn = true
+	}
+
+	// Primary credentials file for newer Claude Code versions.
+	credentialsPath := filepath.Join(prof.HomePath(), ".claude", ".credentials.json")
+	if _, err := os.Stat(credentialsPath); err == nil {
 		status.LoggedIn = true
 	}
 
@@ -374,7 +387,8 @@ func (p *Provider) ValidateProfile(ctx context.Context, prof *profile.Profile) e
 
 // DetectExistingAuth detects existing Claude authentication files in standard locations.
 // Locations checked:
-// - ~/.claude.json (legacy/main OAuth session state)
+// - ~/.claude/.credentials.json (primary OAuth credentials)
+// - ~/.claude.json (legacy OAuth session state)
 // - ~/.config/claude-code/auth.json (current auth credentials)
 func (p *Provider) DetectExistingAuth() (*provider.AuthDetection, error) {
 	detection := &provider.AuthDetection{
@@ -392,6 +406,10 @@ func (p *Provider) DetectExistingAuth() (*provider.AuthDetection, error) {
 		path        string
 		description string
 	}{
+		{
+			path:        filepath.Join(homeDir, ".claude", ".credentials.json"),
+			description: "Claude Code OAuth credentials (primary location)",
+		},
 		{
 			path:        filepath.Join(homeDir, ".claude.json"),
 			description: "Claude Code OAuth session state (legacy location)",
@@ -434,39 +452,51 @@ func (p *Provider) DetectExistingAuth() (*provider.AuthDetection, error) {
 		if err != nil {
 			authLoc.ValidationError = fmt.Sprintf("read error: %v", err)
 		} else {
-			var parsed map[string]interface{}
-			if err := json.Unmarshal(data, &parsed); err != nil {
-				authLoc.ValidationError = fmt.Sprintf("invalid JSON: %v", err)
-			} else {
-				// Check for expected fields based on file type
-				switch filepath.Base(loc.path) {
-				case ".claude.json":
-					// Check for oauthToken or similar
-					if _, ok := parsed["oauthToken"]; ok {
-						authLoc.IsValid = true
-					} else if _, ok := parsed["sessionKey"]; ok {
-						authLoc.IsValid = true
-					} else {
-						authLoc.ValidationError = "missing expected OAuth fields"
-					}
-				case "settings.json":
-					if _, ok := parsed["apiKeyHelper"]; ok {
-						authLoc.IsValid = true
-					} else if _, ok := parsed["apiKey"]; ok {
-						authLoc.IsValid = true
-					} else if _, ok := parsed["api_key"]; ok {
-						authLoc.IsValid = true
-					} else {
-						authLoc.IsValid = true // Accept valid settings JSON
-					}
-				default:
-					// auth.json - check for typical auth fields
-					if _, ok := parsed["accessToken"]; ok {
-						authLoc.IsValid = true
-					} else if _, ok := parsed["access_token"]; ok {
-						authLoc.IsValid = true
-					} else {
-						authLoc.IsValid = true // Accept any valid JSON
+			switch filepath.Base(loc.path) {
+			case ".credentials.json":
+				creds, err := parseClaudeCredentials(data)
+				if err != nil {
+					authLoc.ValidationError = fmt.Sprintf("invalid JSON: %v", err)
+				} else if creds.hasToken() {
+					authLoc.IsValid = true
+				} else {
+					authLoc.ValidationError = "missing expected OAuth fields"
+				}
+			default:
+				var parsed map[string]interface{}
+				if err := json.Unmarshal(data, &parsed); err != nil {
+					authLoc.ValidationError = fmt.Sprintf("invalid JSON: %v", err)
+				} else {
+					// Check for expected fields based on file type
+					switch filepath.Base(loc.path) {
+					case ".claude.json":
+						// Check for oauthToken or similar
+						if _, ok := parsed["oauthToken"]; ok {
+							authLoc.IsValid = true
+						} else if _, ok := parsed["sessionKey"]; ok {
+							authLoc.IsValid = true
+						} else {
+							authLoc.ValidationError = "missing expected OAuth fields"
+						}
+					case "settings.json":
+						if _, ok := parsed["apiKeyHelper"]; ok {
+							authLoc.IsValid = true
+						} else if _, ok := parsed["apiKey"]; ok {
+							authLoc.IsValid = true
+						} else if _, ok := parsed["api_key"]; ok {
+							authLoc.IsValid = true
+						} else {
+							authLoc.IsValid = true // Accept valid settings JSON
+						}
+					default:
+						// auth.json - check for typical auth fields
+						if _, ok := parsed["accessToken"]; ok {
+							authLoc.IsValid = true
+						} else if _, ok := parsed["access_token"]; ok {
+							authLoc.IsValid = true
+						} else {
+							authLoc.IsValid = true // Accept any valid JSON
+						}
 					}
 				}
 			}
@@ -516,6 +546,18 @@ func (p *Provider) ImportAuth(ctx context.Context, sourcePath string, prof *prof
 	// Determine target based on source file type
 	basename := filepath.Base(sourcePath)
 	switch basename {
+	case ".credentials.json":
+		// Copy to profile's .claude directory
+		targetDir := filepath.Join(prof.HomePath(), ".claude")
+		if err := os.MkdirAll(targetDir, 0700); err != nil {
+			return nil, fmt.Errorf("create .claude dir: %w", err)
+		}
+		targetPath := filepath.Join(targetDir, ".credentials.json")
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return nil, fmt.Errorf("copy .credentials.json: %w", err)
+		}
+		copiedFiles = append(copiedFiles, targetPath)
+
 	case ".claude.json":
 		// Copy to profile's home directory
 		targetPath := filepath.Join(prof.HomePath(), ".claude.json")
@@ -641,13 +683,15 @@ func (p *Provider) validateTokenPassive(ctx context.Context, prof *profile.Profi
 	// Check auth files exist
 	claudeJsonPath := filepath.Join(prof.HomePath(), ".claude.json")
 	authJsonPath := filepath.Join(prof.XDGConfigPath(), "claude-code", "auth.json")
+	credentialsPath := filepath.Join(prof.HomePath(), ".claude", ".credentials.json")
 	settingsPath := filepath.Join(prof.HomePath(), ".claude", "settings.json")
 
 	claudeJsonExists := fileExists(claudeJsonPath)
 	authJsonExists := fileExists(authJsonPath)
+	credentialsExists := fileExists(credentialsPath)
 	settingsExists := fileExists(settingsPath)
 
-	if !claudeJsonExists && !authJsonExists {
+	if !claudeJsonExists && !authJsonExists && !credentialsExists {
 		if provider.AuthMode(prof.AuthMode) == provider.AuthModeAPIKey {
 			hasKey, err := claudeSettingsHasAPIKey(settingsPath)
 			if err != nil && settingsExists {
@@ -667,6 +711,24 @@ func (p *Provider) validateTokenPassive(ctx context.Context, prof *profile.Profi
 		result.Valid = false
 		result.Error = "no auth files found"
 		return result, nil
+	}
+
+	// Check .credentials.json if it exists
+	if credentialsExists {
+		creds, err := loadClaudeCredentials(credentialsPath)
+		if err != nil {
+			result.Valid = false
+			result.Error = fmt.Sprintf("invalid .credentials.json: %v", err)
+			return result, nil
+		}
+		if creds.expiresAt != nil {
+			result.ExpiresAt = *creds.expiresAt
+			if result.ExpiresAt.Before(timeNow()) {
+				result.Valid = false
+				result.Error = "token has expired"
+				return result, nil
+			}
+		}
 	}
 
 	// Check .claude.json if it exists
@@ -828,6 +890,54 @@ func claudeSettingsHasAPIKey(path string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+type claudeCredentials struct {
+	ClaudeAiOauth *claudeOAuth `json:"claudeAiOauth"`
+}
+
+type claudeOAuth struct {
+	AccessToken  string  `json:"accessToken"`
+	RefreshToken string  `json:"refreshToken"`
+	ExpiresAt    float64 `json:"expiresAt"`
+}
+
+func parseClaudeCredentials(data []byte) (*claudeCredentials, error) {
+	var creds claudeCredentials
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil, err
+	}
+	return &creds, nil
+}
+
+func (c *claudeCredentials) hasToken() bool {
+	if c == nil || c.ClaudeAiOauth == nil {
+		return false
+	}
+	return c.ClaudeAiOauth.AccessToken != "" || c.ClaudeAiOauth.RefreshToken != ""
+}
+
+type credentialsInfo struct {
+	expiresAt *time.Time
+}
+
+func loadClaudeCredentials(path string) (*credentialsInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	creds, err := parseClaudeCredentials(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info := &credentialsInfo{}
+	if creds.ClaudeAiOauth != nil && creds.ClaudeAiOauth.ExpiresAt > 0 {
+		exp := time.UnixMilli(int64(creds.ClaudeAiOauth.ExpiresAt))
+		info.expiresAt = &exp
+	}
+	return info, nil
 }
 
 func parseExpiryTime(s string) (time.Time, error) {

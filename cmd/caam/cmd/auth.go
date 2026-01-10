@@ -17,12 +17,12 @@ import (
 
 // AuthDetectResult represents the result of auth detection for one provider.
 type AuthDetectResult struct {
-	Provider  string                    `json:"provider"`
-	Found     bool                      `json:"found"`
-	Locations []AuthDetectLocation      `json:"locations"`
-	Primary   *AuthDetectLocation       `json:"primary,omitempty"`
-	Warning   string                    `json:"warning,omitempty"`
-	Error     string                    `json:"error,omitempty"`
+	Provider  string               `json:"provider"`
+	Found     bool                 `json:"found"`
+	Locations []AuthDetectLocation `json:"locations"`
+	Primary   *AuthDetectLocation  `json:"primary,omitempty"`
+	Warning   string               `json:"warning,omitempty"`
+	Error     string               `json:"error,omitempty"`
 }
 
 // AuthDetectLocation represents a detected auth file location.
@@ -499,8 +499,8 @@ func runAuthImport(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("\n")
 	fmt.Printf("Next steps:\n")
-	fmt.Printf("  Run your CLI with: caam run %s/%s -- <your command>\n", tool, name)
-	fmt.Printf("  Or activate profile: eval $(caam env %s/%s)\n", tool, name)
+	fmt.Printf("  Run your CLI with: caam exec %s %s -- <your command>\n", tool, name)
+	fmt.Printf("  Or activate profile: eval \"$(caam env %s %s)\"\n", tool, name)
 
 	return nil
 }

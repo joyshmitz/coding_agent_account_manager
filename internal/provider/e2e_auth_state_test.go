@@ -67,6 +67,38 @@ func TestE2E_ClaudeAuthState(t *testing.T) {
 
 	h.Log.Info("No auth: LoggedIn correctly false")
 
+	h.Log.SetStep("test_credentials_json")
+
+	// Create .claude/.credentials.json (primary OAuth credentials)
+	claudeDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0700); err != nil {
+		t.Fatalf("Failed to create .claude dir: %v", err)
+	}
+	credentialsPath := filepath.Join(claudeDir, ".credentials.json")
+	credentialsContent := `{
+		"claudeAiOauth": {
+			"accessToken": "test-access-token-abc",
+			"refreshToken": "test-refresh-token-def",
+			"expiresAt": 4102444800000
+		}
+	}`
+	if err := os.WriteFile(credentialsPath, []byte(credentialsContent), 0600); err != nil {
+		t.Fatalf("Failed to write .credentials.json: %v", err)
+	}
+
+	status, err = prov.Status(ctx, prof)
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if !status.LoggedIn {
+		t.Errorf("Expected LoggedIn=true with .credentials.json")
+	}
+
+	h.Log.Info("With .credentials.json: LoggedIn correctly true")
+
+	// Remove credentials before testing legacy paths
+	os.Remove(credentialsPath)
+
 	h.Log.SetStep("test_claude_json")
 
 	// Create .claude.json (OAuth session state)

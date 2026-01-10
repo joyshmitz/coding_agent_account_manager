@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestHelperProcess is the entry point for the mock process.
+// TestAddHelperProcess is the entry point for the mock process.
 // It is called by execCommand when mocking is enabled.
-func TestHelperProcess(t *testing.T) {
+func TestAddHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
@@ -113,7 +113,7 @@ func TestAddExtended(t *testing.T) {
 
 	// Override execCommand to call TestHelperProcess
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", name}
+		cs := []string{"-test.run=TestAddHelperProcess", "--", name}
 		cs = append(cs, args...)
 		cmd := exec.CommandContext(ctx, os.Args[0], cs...)
 		cmd.Env = append(os.Environ(), 
