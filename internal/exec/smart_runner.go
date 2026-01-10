@@ -18,6 +18,9 @@ import (
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/rotation"
 )
 
+// ExecCommand allows mocking exec.CommandContext in tests
+var ExecCommand = exec.CommandContext
+
 // SmartRunner orchestrates the auto-handoff flow for seamless profile switching.
 // When a rate limit is detected in the CLI output, SmartRunner:
 // 1. Selects the best backup profile using the rotation algorithm
@@ -122,7 +125,7 @@ func (r *SmartRunner) Run(ctx context.Context, opts RunOptions) error {
 
 	// Build command
 	bin := opts.Provider.DefaultBin()
-	cmd := exec.CommandContext(ctx, bin, opts.Args...)
+	cmd := ExecCommand(ctx, bin, opts.Args...)
 	
 	// Apply env (same as Runner.Run)
 	envMap := make(map[string]string)
@@ -345,6 +348,9 @@ func (r *SmartRunner) monitorOutput(ctx context.Context, ctrl pty.Controller) {
 		if err != nil {
 			break
 		}
+		if output != "" {
+			fmt.Printf("DEBUG: PTY output: %q\n", output)
+		}
 		
 		if output != "" {
 			os.Stdout.Write([]byte(output))
@@ -355,6 +361,7 @@ func (r *SmartRunner) monitorOutput(ctx context.Context, ctrl pty.Controller) {
 			
 			if state == Running {
 				if r.detector.Check(output) {
+					fmt.Fprintf(os.Stderr, "DEBUG: Rate limit detected in: %q\n", output)
 					go r.handleRateLimit(ctx)
 				}
 			} else if state == LoggingIn {
