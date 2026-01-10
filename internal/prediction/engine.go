@@ -174,6 +174,9 @@ func (e *PredictionEngine) Predict(ctx context.Context, usageInfo *usage.UsageIn
 	if pred.CurrentPercent >= 100 {
 		pred.Warning = WarningImminent
 		pred.PredictedTime = time.Now()
+		pred.TimeToDepletion = 0
+		pred.DataSources = append(pred.DataSources, "current_usage")
+		pred.Confidence = 1.0 // Certain - already depleted
 		return pred
 	}
 
@@ -284,6 +287,8 @@ func (e *PredictionEngine) PredictWithBurnRate(usageInfo *usage.UsageInfo, burnR
 	if remainingPercent <= 0 {
 		pred.Warning = WarningImminent
 		pred.PredictedTime = time.Now()
+		pred.TimeToDepletion = 0
+		pred.Confidence = 1.0 // Certain - already depleted
 		return pred
 	}
 
@@ -305,6 +310,8 @@ func (e *PredictionEngine) PredictWithBurnRate(usageInfo *usage.UsageInfo, burnR
 		pred.Warning = WarningImminent
 	} else if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 30*time.Minute {
 		pred.Warning = WarningApproaching
+	} else {
+		pred.Warning = WarningNone
 	}
 
 	pred.Confidence = e.calculateConfidence(burnRate, 1)

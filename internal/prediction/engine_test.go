@@ -110,6 +110,16 @@ func TestPredictionEngine_Predict_AlreadyDepleted(t *testing.T) {
 	if pred.CurrentPercent != 100 {
 		t.Errorf("CurrentPercent = %v, want 100", pred.CurrentPercent)
 	}
+	// Already depleted predictions should be valid
+	if !pred.IsValid() {
+		t.Errorf("IsValid() = false, want true for depleted prediction")
+	}
+	if pred.Confidence != 1.0 {
+		t.Errorf("Confidence = %v, want 1.0 for certain depletion", pred.Confidence)
+	}
+	if pred.TimeToDepletion != 0 {
+		t.Errorf("TimeToDepletion = %v, want 0", pred.TimeToDepletion)
+	}
 }
 
 func TestPredictionEngine_Predict_WithSessionData(t *testing.T) {
