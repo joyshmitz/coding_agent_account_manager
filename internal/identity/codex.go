@@ -38,6 +38,19 @@ func findCodexToken(auth map[string]interface{}) (string, string, bool) {
 	if token := stringFromMap(auth, "idToken"); token != "" {
 		return token, "idToken", true
 	}
+
+	rawTokens, ok := auth["tokens"]
+	var tokenMap map[string]interface{}
+	if ok {
+		tokenMap, _ = rawTokens.(map[string]interface{})
+		if token := stringFromMap(tokenMap, "id_token"); token != "" {
+			return token, "tokens.id_token", true
+		}
+		if token := stringFromMap(tokenMap, "idToken"); token != "" {
+			return token, "tokens.idToken", true
+		}
+	}
+
 	if token := stringFromMap(auth, "access_token"); token != "" {
 		return token, "access_token", true
 	}
@@ -48,20 +61,8 @@ func findCodexToken(auth map[string]interface{}) (string, string, bool) {
 		return token, "token", true
 	}
 
-	rawTokens, ok := auth["tokens"]
-	if !ok {
+	if tokenMap == nil {
 		return "", "", false
-	}
-	tokenMap, ok := rawTokens.(map[string]interface{})
-	if !ok {
-		return "", "", false
-	}
-
-	if token := stringFromMap(tokenMap, "id_token"); token != "" {
-		return token, "tokens.id_token", true
-	}
-	if token := stringFromMap(tokenMap, "idToken"); token != "" {
-		return token, "tokens.idToken", true
 	}
 	if token := stringFromMap(tokenMap, "access_token"); token != "" {
 		return token, "tokens.access_token", true
