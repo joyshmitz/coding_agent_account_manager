@@ -34,32 +34,36 @@ type ExpiryInfo struct {
 
 // ParseClaudeExpiry extracts token expiry from Claude Code auth files.
 //
-// Claude Code stores auth in two locations:
-//   - ~/.claude.json (main OAuth session state)
-//   - ~/.config/claude-code/auth.json (auth credentials)
+// Claude Code stores OAuth credentials in:
+//   - ~/.claude/.credentials.json (primary - contains claudeAiOauth object)
 //
-// Expected JSON structures (based on common OAuth patterns):
-//
-//	{
-//	  "accessToken": "...",
-//	  "refreshToken": "...",
-//	  "expiresAt": "2025-12-17T18:00:00Z"  // ISO8601
-//	}
-//
-// Or:
+// The credentials file structure:
 //
 //	{
-//	  "access_token": "...",
-//	  "refresh_token": "...",
-//	  "expires_at": 1734451200  // Unix timestamp
+//	  "claudeAiOauth": {
+//	    "accessToken": "...",
+//	    "refreshToken": "...",
+//	    "expiresAt": 1768042451877,  // Unix milliseconds
+//	    "rateLimitTier": "default_claude_max_20x",
+//	    "subscriptionType": "max",
+//	    "scopes": [...]
+//	  }
 //	}
 func ParseClaudeExpiry(authDir string) (*ExpiryInfo, error) {
 	homeDir, _ := os.UserHomeDir()
 
 	if authDir == "" {
-		// System state probing.
+		// System state probing - check the actual credentials file location
+		credentialsPath := filepath.Join(homeDir, ".claude", ".credentials.json")
+		info, err := parseClaudeCredentialsFile(credentialsPath)
+		if err == nil {
+			info.Source = credentialsPath
+			return info, nil
+		}
+
+		// Fallback to legacy locations for backwards compatibility
 		claudeJsonPath := filepath.Join(homeDir, ".claude.json")
-		info, err := parseOAuthFile(claudeJsonPath)
+		info, err = parseOAuthFile(claudeJsonPath)
 		if err == nil {
 			info.Source = claudeJsonPath
 			return info, nil
@@ -77,19 +81,28 @@ func ParseClaudeExpiry(authDir string) (*ExpiryInfo, error) {
 			return info, nil
 		}
 
-		if _, statErr := os.Stat(claudeJsonPath); os.IsNotExist(statErr) {
-			if _, statErr2 := os.Stat(authJsonPath); os.IsNotExist(statErr2) {
-				return nil, ErrNoAuthFile
+		if _, statErr := os.Stat(credentialsPath); os.IsNotExist(statErr) {
+			if _, statErr2 := os.Stat(claudeJsonPath); os.IsNotExist(statErr2) {
+				if _, statErr3 := os.Stat(authJsonPath); os.IsNotExist(statErr3) {
+					return nil, ErrNoAuthFile
+				}
 			}
 		}
 
 		return nil, ErrNoExpiry
 	}
 
-	// Vault/profile probing. Vault profiles store the optional XDG auth file as a
-	// flat "auth.json" next to ".claude.json" (see README vault structure).
+	// Vault/profile probing - check for credentials file in vault
+	credentialsPath := filepath.Join(authDir, ".credentials.json")
+	info, err := parseClaudeCredentialsFile(credentialsPath)
+	if err == nil {
+		info.Source = credentialsPath
+		return info, nil
+	}
+
+	// Fallback to legacy vault structure
 	claudeJsonPath := filepath.Join(authDir, ".claude.json")
-	info, err := parseOAuthFile(claudeJsonPath)
+	info, err = parseOAuthFile(claudeJsonPath)
 	if err == nil {
 		info.Source = claudeJsonPath
 		return info, nil
@@ -109,12 +122,68 @@ func ParseClaudeExpiry(authDir string) (*ExpiryInfo, error) {
 		return info, nil
 	}
 
-	if _, statErr := os.Stat(claudeJsonPath); os.IsNotExist(statErr) {
-		if _, statErr2 := os.Stat(flatAuthPath); os.IsNotExist(statErr2) {
-			if _, statErr3 := os.Stat(nestedAuthPath); os.IsNotExist(statErr3) {
-				return nil, ErrNoAuthFile
+	if _, statErr := os.Stat(credentialsPath); os.IsNotExist(statErr) {
+		if _, statErr2 := os.Stat(claudeJsonPath); os.IsNotExist(statErr2) {
+			if _, statErr3 := os.Stat(flatAuthPath); os.IsNotExist(statErr3) {
+				if _, statErr4 := os.Stat(nestedAuthPath); os.IsNotExist(statErr4) {
+					return nil, ErrNoAuthFile
+				}
 			}
 		}
+	}
+
+	return nil, ErrNoExpiry
+}
+
+// claudeCredentialsJSON represents the Claude Code credentials file structure.
+type claudeCredentialsJSON struct {
+	ClaudeAiOauth *claudeOAuthJSON `json:"claudeAiOauth"`
+}
+
+// claudeOAuthJSON represents the OAuth data within the credentials file.
+type claudeOAuthJSON struct {
+	AccessToken      string   `json:"accessToken"`
+	RefreshToken     string   `json:"refreshToken"`
+	ExpiresAt        float64  `json:"expiresAt"` // Unix milliseconds
+	RateLimitTier    string   `json:"rateLimitTier"`
+	SubscriptionType string   `json:"subscriptionType"`
+	Scopes           []string `json:"scopes"`
+}
+
+// parseClaudeCredentialsFile parses the Claude Code credentials file format.
+func parseClaudeCredentialsFile(path string) (*ExpiryInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var creds claudeCredentialsJSON
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+
+	if creds.ClaudeAiOauth == nil {
+		return nil, ErrNoExpiry
+	}
+
+	oauth := creds.ClaudeAiOauth
+	info := &ExpiryInfo{
+		HasRefreshToken: oauth.RefreshToken != "",
+	}
+
+	// Parse expiresAt (Unix milliseconds)
+	if oauth.ExpiresAt > 0 {
+		info.ExpiresAt = time.UnixMilli(int64(oauth.ExpiresAt))
+	}
+
+	// If we have expiry info, return successfully
+	if !info.ExpiresAt.IsZero() || info.HasRefreshToken {
+		return info, nil
+	}
+
+	// If we have an access token but no expiry, still return valid
+	if oauth.AccessToken != "" {
+		return info, nil
 	}
 
 	return nil, ErrNoExpiry
