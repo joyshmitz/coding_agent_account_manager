@@ -312,3 +312,53 @@ func TestConnectivityResult(t *testing.T) {
 		t.Errorf("ProfileCount = %d, want 5", result.ProfileCount)
 	}
 }
+
+func TestPosixJoin(t *testing.T) {
+	tests := []struct {
+		name   string
+		elems  []string
+		want   string
+	}{
+		{"empty", []string{}, ""},
+		{"single", []string{"foo"}, "foo"},
+		{"two", []string{"foo", "bar"}, "foo/bar"},
+		{"three", []string{"a", "b", "c"}, "a/b/c"},
+		{"with empty", []string{"a", "", "c"}, "a/c"},
+		{"leading slash", []string{"/home", "user"}, "/home/user"},
+		{"double slash cleanup", []string{"foo/", "/bar"}, "foo/bar"},
+		{"all empty", []string{"", "", ""}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := posixJoin(tt.elems...)
+			if got != tt.want {
+				t.Errorf("posixJoin(%v) = %q, want %q", tt.elems, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPosixDir(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/home/user/file.txt", "/home/user"},
+		{"/home/user", "/home"},
+		{"/file.txt", "/"},
+		{"file.txt", "."},
+		{"foo/bar/baz", "foo/bar"},
+		{"/", "/"},
+		{"a", "."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := posixDir(tt.path)
+			if got != tt.want {
+				t.Errorf("posixDir(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}

@@ -43,6 +43,8 @@ daemon:
 	env = append(env, "GO_WANT_DAEMON_HELPER=1")
 	env = append(env, fmt.Sprintf("XDG_DATA_HOME=%s", rootDir))
 	env = append(env, fmt.Sprintf("XDG_CONFIG_HOME=%s", rootDir))
+	// Critical: Set CAAM_HOME so LoadSPMConfig finds the isolated config.yaml
+	env = append(env, fmt.Sprintf("CAAM_HOME=%s", configDir))
 	
 	h.EndStep("Setup")
 
@@ -55,9 +57,13 @@ daemon:
 	
 	cmd := exec.Command(exe, "-test.run=^TestDaemonHelper$")
 	cmd.Env = env
+	
 	// Capture output for debugging
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
+	logPath := filepath.Join(rootDir, "daemon_lifecycle.log")
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	
 	// Start without waiting
 	err = cmd.Start()
@@ -74,6 +80,11 @@ daemon:
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	
+	if !pidFound {
+		logs, _ := os.ReadFile(logPath)
+		h.LogInfo("Daemon startup failed", "logs", string(logs))
 	}
 	require.True(t, pidFound, "PID file not created within timeout")
 	

@@ -11,6 +11,7 @@ import (
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authpool"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/config"
+	caamdb "github.com/Dicklesworthstone/coding_agent_account_manager/internal/db"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/handoff"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/notify"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/pty"
@@ -36,6 +37,7 @@ type SmartRunner struct {
 	detector      *ratelimit.Detector
 	rotation      *rotation.Selector
 	vault         *authfile.Vault
+	db            *caamdb.DB
 	authPool      *authpool.AuthPool
 	ptyController pty.Controller
 	loginHandler  handoff.LoginHandler
@@ -64,6 +66,7 @@ type SmartRunnerOptions struct {
 	HandoffConfig *config.HandoffConfig
 	Notifier      notify.Notifier
 	Vault         *authfile.Vault
+	DB            *caamdb.DB
 	AuthPool      *authpool.AuthPool
 	Rotation      *rotation.Selector
 }
@@ -79,6 +82,7 @@ func NewSmartRunner(runner *Runner, opts SmartRunnerOptions) *SmartRunner {
 	return &SmartRunner{
 		Runner:        runner,
 		vault:         opts.Vault,
+		db:            opts.DB,
 		authPool:      opts.AuthPool,
 		rotation:      opts.Rotation,
 		handoffConfig: opts.HandoffConfig,
@@ -245,8 +249,12 @@ func (r *SmartRunner) handleRateLimit(ctx context.Context) {
 	r.notifyHandoff(r.currentProfile, nextProfile)
 
 	// 3. Mark current profile as in cooldown (if authPool is available)
+	cooldownDuration := 30 * time.Minute
 	if r.authPool != nil {
-		r.authPool.SetCooldown(r.loginHandler.Provider(), r.currentProfile, 30*time.Minute)
+		r.authPool.SetCooldown(r.loginHandler.Provider(), r.currentProfile, cooldownDuration)
+	}
+	if r.db != nil {
+		r.db.SetCooldown(r.loginHandler.Provider(), r.currentProfile, time.Now(), cooldownDuration, "auto-detected via SmartRunner")
 	}
 
 	// 4. Swap auth files

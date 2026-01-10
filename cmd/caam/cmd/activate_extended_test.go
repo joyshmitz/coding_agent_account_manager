@@ -75,29 +75,21 @@ func TestActivateCommand_Extended(t *testing.T) {
 	
 	// 2. Test Basic Activation
 	h.StartStep("Activate", "Activate 'work' profile")
-	
-	// Capture output
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	
-	// Set flags
+
+	// Set flags before capture
 	activateCmd.Flags().Set("json", "true")
 	activateCmd.Flags().Set("auto", "false")
-	
-	// Run
-	err := runActivate(activateCmd, []string{"claude", "work"})
-	
-	w.Close()
-	os.Stdout = oldStdout
+
+	// Run with stdout capture (panic-safe)
+	outputStr, err := captureStdout(t, func() error {
+		return runActivate(activateCmd, []string{"claude", "work"})
+	})
 	require.NoError(t, err)
-	
+
 	// Parse output
-	var buf [4096]byte
-	n, _ := r.Read(buf[:])
 	var output activateOutput
-	json.Unmarshal(buf[:n], &output)
-	
+	require.NoError(t, json.Unmarshal([]byte(outputStr), &output))
+
 	assert.True(t, output.Success)
 	assert.Equal(t, "claude", output.Tool)
 	assert.Equal(t, "work", output.Profile)
@@ -111,22 +103,18 @@ func TestActivateCommand_Extended(t *testing.T) {
 	
 	// 3. Test Unknown Tool
 	h.StartStep("Error", "Test unknown tool")
-	
+
 	activateCmd.Flags().Set("json", "true")
-	r, w, _ = os.Pipe()
-	os.Stdout = w
-	
-	err = runActivate(activateCmd, []string{"unknown", "work"})
-	
-	w.Close()
-	os.Stdout = oldStdout
+
 	// runActivate returns nil when json=true, but prints error in json
+	outputStr, err = captureStdout(t, func() error {
+		return runActivate(activateCmd, []string{"unknown", "work"})
+	})
 	require.NoError(t, err)
-	
-	n, _ = r.Read(buf[:])
+
 	var errOutput activateOutput
-	json.Unmarshal(buf[:n], &errOutput)
-	
+	require.NoError(t, json.Unmarshal([]byte(outputStr), &errOutput))
+
 	assert.False(t, errOutput.Success)
 	assert.Contains(t, errOutput.Error, "unknown tool")
 	
@@ -157,18 +145,15 @@ stealth:
 	h.SetEnv("XDG_CONFIG_HOME", rootDir) // for config.json (old config)
 	
 	// Try activate
-	r, w, _ = os.Pipe()
-	os.Stdout = w
-	
-	err = runActivate(activateCmd, []string{"claude", "work"})
-	
-	w.Close()
-	os.Stdout = oldStdout
-	
-	n, _ = r.Read(buf[:])
+	outputStr, err = captureStdout(t, func() error {
+		return runActivate(activateCmd, []string{"claude", "work"})
+	})
+	// Note: runActivate returns nil when json=true, error is in output
+	require.NoError(t, err)
+
 	var cooldownOutput activateOutput
-	json.Unmarshal(buf[:n], &cooldownOutput)
-	
+	require.NoError(t, json.Unmarshal([]byte(outputStr), &cooldownOutput))
+
 	// Should fail due to cooldown
 	assert.False(t, cooldownOutput.Success)
 	assert.Contains(t, cooldownOutput.Error, "is in cooldown")

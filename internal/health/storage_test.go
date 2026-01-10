@@ -251,3 +251,275 @@ func TestCalculateStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultHealthPath(t *testing.T) {
+	t.Run("with XDG_DATA_HOME", func(t *testing.T) {
+		orig := os.Getenv("XDG_DATA_HOME")
+		defer os.Setenv("XDG_DATA_HOME", orig)
+
+		os.Setenv("XDG_DATA_HOME", "/custom/data")
+		path := DefaultHealthPath()
+		expected := "/custom/data/caam/health.json"
+		if path != expected {
+			t.Errorf("expected %s, got %s", expected, path)
+		}
+	})
+
+	t.Run("without XDG_DATA_HOME", func(t *testing.T) {
+		orig := os.Getenv("XDG_DATA_HOME")
+		defer os.Setenv("XDG_DATA_HOME", orig)
+
+		os.Setenv("XDG_DATA_HOME", "")
+		path := DefaultHealthPath()
+		// Should use home dir
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			expected := filepath.Join(home, ".local", "share", "caam", "health.json")
+			if path != expected {
+				t.Errorf("expected %s, got %s", expected, path)
+			}
+		}
+	})
+}
+
+func TestNewStorage_EmptyPath(t *testing.T) {
+	// NewStorage with empty path should use DefaultHealthPath
+	storage := NewStorage("")
+	expected := DefaultHealthPath()
+	if storage.Path() != expected {
+		t.Errorf("expected path %s, got %s", expected, storage.Path())
+	}
+}
+
+func TestStorage_DeleteProfile(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "health.json")
+	storage := NewStorage(path)
+
+	// Create a profile first
+	health := &ProfileHealth{
+		ErrorCount1h: 3,
+		PlanType:     "pro",
+	}
+	if err := storage.UpdateProfile("claude", "test@example.com", health); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+
+	// Verify it exists
+	retrieved, err := storage.GetProfile("claude", "test@example.com")
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if retrieved == nil {
+		t.Fatal("profile should exist before deletion")
+	}
+
+	// Delete the profile
+	if err := storage.DeleteProfile("claude", "test@example.com"); err != nil {
+		t.Fatalf("DeleteProfile failed: %v", err)
+	}
+
+	// Verify it's gone
+	retrieved, err = storage.GetProfile("claude", "test@example.com")
+	if err != nil {
+		t.Fatalf("GetProfile failed after delete: %v", err)
+	}
+	if retrieved != nil {
+		t.Error("profile should be nil after deletion")
+	}
+}
+
+func TestStorage_SetPlanType(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "health.json")
+	storage := NewStorage(path)
+
+	// Set plan type on non-existent profile
+	if err := storage.SetPlanType("gemini", "user", "enterprise"); err != nil {
+		t.Fatalf("SetPlanType failed: %v", err)
+	}
+
+	// Verify
+	profile, err := storage.GetProfile("gemini", "user")
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("profile should exist after SetPlanType")
+	}
+	if profile.PlanType != "enterprise" {
+		t.Errorf("expected plan type 'enterprise', got '%s'", profile.PlanType)
+	}
+
+	// Update plan type
+	if err := storage.SetPlanType("gemini", "user", "pro"); err != nil {
+		t.Fatalf("SetPlanType update failed: %v", err)
+	}
+
+	profile, err = storage.GetProfile("gemini", "user")
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if profile.PlanType != "pro" {
+		t.Errorf("expected plan type 'pro', got '%s'", profile.PlanType)
+	}
+}
+
+func TestStorage_DecayPenalties(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "health.json")
+	storage := NewStorage(path)
+
+	// Create a profile with a penalty
+	health := &ProfileHealth{
+		Penalty:          1.0,
+		PenaltyUpdatedAt: time.Now().Add(-2 * time.Hour), // 2 hours ago
+	}
+	if err := storage.UpdateProfile("claude", "test", health); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+
+	// Decay penalties
+	if err := storage.DecayPenalties(); err != nil {
+		t.Fatalf("DecayPenalties failed: %v", err)
+	}
+
+	// Verify penalty was decayed
+	profile, err := storage.GetProfile("claude", "test")
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if profile.Penalty >= 1.0 {
+		t.Errorf("penalty should have decayed from 1.0, got %f", profile.Penalty)
+	}
+}
+
+func TestStorage_DecayPenalties_NoChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "health.json")
+	storage := NewStorage(path)
+
+	// Create a profile with zero penalty
+	health := &ProfileHealth{
+		Penalty:          0,
+		PenaltyUpdatedAt: time.Now(),
+	}
+	if err := storage.UpdateProfile("claude", "test", health); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+
+	// Decay penalties (should not save since no change)
+	if err := storage.DecayPenalties(); err != nil {
+		t.Fatalf("DecayPenalties failed: %v", err)
+	}
+
+	// Verify penalty is still 0
+	profile, err := storage.GetProfile("claude", "test")
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if profile.Penalty != 0 {
+		t.Errorf("penalty should still be 0, got %f", profile.Penalty)
+	}
+}
+
+func TestStorage_GetStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "health.json")
+	storage := NewStorage(path)
+
+	// Test unknown status for non-existent profile
+	status, err := storage.GetStatus("unknown", "profile")
+	if err != nil {
+		t.Fatalf("GetStatus failed: %v", err)
+	}
+	if status != StatusUnknown {
+		t.Errorf("expected StatusUnknown for non-existent profile, got %v", status)
+	}
+
+	// Create a healthy profile
+	health := &ProfileHealth{
+		TokenExpiresAt: time.Now().Add(2 * time.Hour),
+		ErrorCount1h:   0,
+	}
+	if err := storage.UpdateProfile("claude", "healthy", health); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+
+	status, err = storage.GetStatus("claude", "healthy")
+	if err != nil {
+		t.Fatalf("GetStatus failed: %v", err)
+	}
+	if status != StatusHealthy {
+		t.Errorf("expected StatusHealthy, got %v", status)
+	}
+
+	// Create an expired profile
+	health = &ProfileHealth{
+		TokenExpiresAt: time.Now().Add(-1 * time.Hour),
+	}
+	if err := storage.UpdateProfile("claude", "expired", health); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+
+	status, err = storage.GetStatus("claude", "expired")
+	if err != nil {
+		t.Fatalf("GetStatus failed: %v", err)
+	}
+	if status != StatusCritical {
+		t.Errorf("expected StatusCritical for expired token, got %v", status)
+	}
+}
+
+func TestStorage_ListProfiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "health.json")
+	storage := NewStorage(path)
+
+	// List empty profiles
+	profiles, err := storage.ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles failed: %v", err)
+	}
+	if len(profiles) != 0 {
+		t.Errorf("expected 0 profiles, got %d", len(profiles))
+	}
+
+	// Add some profiles
+	if err := storage.UpdateProfile("claude", "user1", &ProfileHealth{PlanType: "pro"}); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+	if err := storage.UpdateProfile("codex", "user2", &ProfileHealth{PlanType: "free"}); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+	if err := storage.UpdateProfile("gemini", "user3", &ProfileHealth{PlanType: "enterprise"}); err != nil {
+		t.Fatalf("UpdateProfile failed: %v", err)
+	}
+
+	// List again
+	profiles, err = storage.ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles failed: %v", err)
+	}
+	if len(profiles) != 3 {
+		t.Errorf("expected 3 profiles, got %d", len(profiles))
+	}
+
+	// Verify profiles are present with correct data
+	if p, ok := profiles["claude/user1"]; !ok || p.PlanType != "pro" {
+		t.Error("claude/user1 profile not found or has wrong PlanType")
+	}
+	if p, ok := profiles["codex/user2"]; !ok || p.PlanType != "free" {
+		t.Error("codex/user2 profile not found or has wrong PlanType")
+	}
+	if p, ok := profiles["gemini/user3"]; !ok || p.PlanType != "enterprise" {
+		t.Error("gemini/user3 profile not found or has wrong PlanType")
+	}
+
+	// Verify it's a copy (modifying should not affect original)
+	profiles["claude/user1"].PlanType = "modified"
+	original, _ := storage.GetProfile("claude", "user1")
+	if original.PlanType != "pro" {
+		t.Error("ListProfiles should return a copy, not the original")
+	}
+}

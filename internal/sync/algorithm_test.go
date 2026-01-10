@@ -476,3 +476,76 @@ func TestDetermineSyncOperationBothNil(t *testing.T) {
 		t.Error("Expected error for non-existent profile")
 	}
 }
+
+// TestAtomicWriteFile tests the atomicWriteFile function.
+func TestAtomicWriteFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	testPath := filepath.Join(tmpDir, "test.txt")
+	testData := []byte("hello, world")
+
+	t.Run("success", func(t *testing.T) {
+		if err := atomicWriteFile(testPath, testData, 0600); err != nil {
+			t.Fatalf("atomicWriteFile failed: %v", err)
+		}
+
+		// Verify file contents
+		data, err := os.ReadFile(testPath)
+		if err != nil {
+			t.Fatalf("Failed to read file: %v", err)
+		}
+		if string(data) != string(testData) {
+			t.Errorf("File content = %q, want %q", string(data), string(testData))
+		}
+	})
+
+	t.Run("overwrite", func(t *testing.T) {
+		newData := []byte("new content")
+		if err := atomicWriteFile(testPath, newData, 0600); err != nil {
+			t.Fatalf("atomicWriteFile failed: %v", err)
+		}
+
+		data, err := os.ReadFile(testPath)
+		if err != nil {
+			t.Fatalf("Failed to read file: %v", err)
+		}
+		if string(data) != string(newData) {
+			t.Errorf("File content = %q, want %q", string(data), string(newData))
+		}
+	})
+
+	t.Run("invalid path", func(t *testing.T) {
+		err := atomicWriteFile("/nonexistent/dir/file.txt", testData, 0600)
+		if err == nil {
+			t.Error("Expected error for invalid path")
+		}
+	})
+}
+
+// TestLocalRandomString tests the localRandomString function.
+func TestLocalRandomString(t *testing.T) {
+	t.Run("length", func(t *testing.T) {
+		for _, n := range []int{4, 8, 16, 32} {
+			s := localRandomString(n)
+			if len(s) != n {
+				t.Errorf("localRandomString(%d) len = %d, want %d", n, len(s), n)
+			}
+		}
+	})
+
+	t.Run("uniqueness", func(t *testing.T) {
+		s1 := localRandomString(16)
+		s2 := localRandomString(16)
+		if s1 == s2 {
+			t.Error("localRandomString should generate different strings")
+		}
+	})
+
+	t.Run("characters", func(t *testing.T) {
+		s := localRandomString(100)
+		for _, c := range s {
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+				t.Errorf("localRandomString contains invalid char: %c", c)
+			}
+		}
+	})
+}

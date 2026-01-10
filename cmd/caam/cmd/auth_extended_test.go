@@ -116,6 +116,11 @@ func TestAuthCommands_Extended(t *testing.T) {
 		profileStore = originalProfileStore
 		registry = originalRegistry
 		envLookup = originalEnvLookup
+		// Reset flags that may have been modified during tests
+		authDetectCmd.Flags().Set("json", "false")
+		authImportCmd.Flags().Set("json", "false")
+		authImportCmd.Flags().Set("name", "")
+		authImportCmd.Flags().Set("source", "")
 	}()
 	
 	profileStore = profile.NewStore(storePath)

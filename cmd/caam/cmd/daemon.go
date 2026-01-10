@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/config"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/daemon"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 )
@@ -82,6 +83,13 @@ func runDaemonStart(cmd *cobra.Command, args []string) error {
 	threshold, _ := cmd.Flags().GetDuration("threshold")
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	usePool, _ := cmd.Flags().GetBool("pool")
+
+	// Load global config to check for PID file setting
+	if spmCfg, err := config.LoadSPMConfig(); err == nil {
+		if spmCfg.Runtime.PIDFilePath != "" {
+			daemon.SetPIDFilePath(spmCfg.Runtime.PIDFilePath)
+		}
+	}
 
 	// Check if daemon is already running
 	running, pid, err := daemon.GetDaemonStatus()
@@ -186,6 +194,13 @@ func runDaemonBackground(interval, threshold time.Duration, verbose, usePool boo
 }
 
 func runDaemonStop(cmd *cobra.Command, args []string) error {
+	// Load global config to check for PID file setting
+	if spmCfg, err := config.LoadSPMConfig(); err == nil {
+		if spmCfg.Runtime.PIDFilePath != "" {
+			daemon.SetPIDFilePath(spmCfg.Runtime.PIDFilePath)
+		}
+	}
+
 	running, pid, err := daemon.GetDaemonStatus()
 	if err != nil {
 		return fmt.Errorf("check daemon status: %w", err)
@@ -221,6 +236,13 @@ func runDaemonStop(cmd *cobra.Command, args []string) error {
 }
 
 func runDaemonStatus(cmd *cobra.Command, args []string) error {
+	// Load global config to check for PID file setting
+	if spmCfg, err := config.LoadSPMConfig(); err == nil {
+		if spmCfg.Runtime.PIDFilePath != "" {
+			daemon.SetPIDFilePath(spmCfg.Runtime.PIDFilePath)
+		}
+	}
+
 	running, pid, err := daemon.GetDaemonStatus()
 	if err != nil {
 		return fmt.Errorf("check daemon status: %w", err)

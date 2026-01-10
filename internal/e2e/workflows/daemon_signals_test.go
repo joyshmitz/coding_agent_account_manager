@@ -41,6 +41,8 @@ daemon:
 	env := os.Environ()
 	env = append(env, "GO_WANT_DAEMON_HELPER=1")
 	env = append(env, fmt.Sprintf("XDG_CONFIG_HOME=%s", rootDir))
+	// Critical: Set CAAM_HOME so LoadSPMConfig finds the isolated config.yaml
+	env = append(env, fmt.Sprintf("CAAM_HOME=%s", configDir))
 	// We need to capture logs to verify reload
 	logPath := filepath.Join(rootDir, "daemon.log")
 	// Daemon helper doesn't use config for log path, it uses args or default.
@@ -71,11 +73,19 @@ daemon:
 	require.NoError(t, err)
 	
 	// Wait for PID file
+	pidFound := false
 	for i := 0; i < 50; i++ {
 		if _, err := os.Stat(pidFile); err == nil {
+			pidFound = true
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	
+	if !pidFound {
+		logs, _ := os.ReadFile(logPath)
+		h.LogInfo("Daemon startup failed", "logs", string(logs))
+		t.FailNow()
 	}
 	
 	content, _ := os.ReadFile(pidFile)

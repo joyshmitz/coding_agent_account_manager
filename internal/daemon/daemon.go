@@ -599,8 +599,19 @@ func isUnsupportedError(err error, target **refresh.UnsupportedError) bool {
 	return false
 }
 
+// pidFilePath stores the configured PID file path.
+var pidFilePath string
+
+// SetPIDFilePath sets the path for the PID file.
+func SetPIDFilePath(path string) {
+	pidFilePath = path
+}
+
 // PIDFilePath returns the path to the daemon's PID file.
 func PIDFilePath() string {
+	if pidFilePath != "" {
+		return pidFilePath
+	}
 	return filepath.Join(os.TempDir(), "caam-daemon.pid")
 }
 

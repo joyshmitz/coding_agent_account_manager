@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
+	caamexec "github.com/Dicklesworthstone/coding_agent_account_manager/internal/exec"
 	caamdb "github.com/Dicklesworthstone/coding_agent_account_manager/internal/db"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/provider/claude"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/testutil"
-	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/wrap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,13 +34,6 @@ func TestHelperProcess_Run(t *testing.T) {
 		os.Exit(1)
 	case "failover":
 		// Fail first time (if profile is work), succeed second time (if profile is personal)
-		// We can detect profile by checking auth file content or some marker
-		// For simplicity, let's check an env var that we set in the test
-		// But runOnce activates the profile, it doesn't set env vars for the subprocess 
-		// except those passed to it.
-		// However, runOnce activates the profile by restoring files.
-		// We can check the content of the restored auth file.
-		
 		authPath := os.Getenv("MOCK_AUTH_PATH")
 		content, _ := os.ReadFile(authPath)
 		if string(content) == `{"token":"work"}` {
@@ -73,9 +68,9 @@ func TestRunCommand_Extended(t *testing.T) {
 	h.SetEnv("XDG_DATA_HOME", rootDir)
 	configDir := filepath.Join(rootDir, "caam")
 	h.SetEnv("CAAM_HOME", configDir)
-	h.SetEnv("XDG_CONFIG_HOME", rootDir) // for config.json
+	h.SetEnv("XDG_CONFIG_HOME", rootDir)
 
-	// Write config to set initial delay
+	// Write config
 	require.NoError(t, os.MkdirAll(filepath.Join(rootDir, "caam"), 0755))
 	configPath := filepath.Join(rootDir, "caam", "config.json")
 	configJSON := `{"wrap": {"initial_delay": "10ms"}}`
@@ -87,18 +82,22 @@ func TestRunCommand_Extended(t *testing.T) {
 	for k, v := range tools {
 		originalTools[k] = v
 	}
-	originalExecCommand := wrap.ExecCommand
+	originalRegistry := registry
+	originalExecCommand := caamexec.ExecCommand
 	originalGetWd := getWd
-	originalAuthFileSetProvider := wrap.AuthFileSetForProvider
 	defer func() {
 		vault = originalVault
 		tools = originalTools
-		wrap.ExecCommand = originalExecCommand
+		registry = originalRegistry
+		caamexec.ExecCommand = originalExecCommand
 		getWd = originalGetWd
-		wrap.AuthFileSetForProvider = originalAuthFileSetProvider
 	}()
 	
 	vault = authfile.NewVault(vaultDir)
+	
+	// Setup registry
+	registry = provider.NewRegistry()
+	registry.Register(claude.New())
 	
 	// Define target location for restore
 	homeDir := filepath.Join(rootDir, "home")
@@ -106,7 +105,7 @@ func TestRunCommand_Extended(t *testing.T) {
 	require.NoError(t, os.MkdirAll(homeDir, 0755))
 	
 	// Setup profiles in vault
-	// 1. Active profile (should be picked first alphabetically)
+	// 1. Active profile (alphabetically first)
 	activeDir := filepath.Join(vaultDir, "claude", "active_profile")
 	require.NoError(t, os.MkdirAll(activeDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(activeDir, "auth.json"), []byte(`{"token":"work"}`), 0600))
@@ -117,40 +116,14 @@ func TestRunCommand_Extended(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(backupDir, "auth.json"), []byte(`{"token":"personal"}`), 0600))
 	
 	tools["claude"] = func() authfile.AuthFileSet {
-	
 		return authfile.AuthFileSet{
-	
 			Tool: "claude",
-	
 			Files: []authfile.AuthFileSpec{
-	
 				{Path: targetPath, Required: true},
-	
 			},
-	
 		}
-	
 	}
 	
-	
-	
-	wrap.AuthFileSetForProvider = func(provider string) (authfile.AuthFileSet, bool) {
-	
-		if provider == "claude" {
-	
-			return tools["claude"](), true
-	
-		}
-	
-		return authfile.AuthFileSet{}, false
-	
-	}
-	
-	
-	
-	// Mock getWd
-	
-
 	getWd = func() (string, error) {
 		return rootDir, nil
 	}
@@ -160,8 +133,8 @@ h.EndStep("Setup")
 	// 2. Test Success
 	h.StartStep("Success", "Test successful run")
 	
-	wrap.ExecCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run", "^TestHelperProcess_Run$", "--", name}
+	caamexec.ExecCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cs := []string{" -test.run=^TestHelperProcess_Run$", "--", name}
 		cs = append(cs, args...)
 		cmd := exec.CommandContext(ctx, os.Args[0], cs...)
 		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1", "MOCK_RUN_MODE=success")
@@ -177,19 +150,17 @@ h.EndStep("Success")
 	// 3. Test Failover
 	h.StartStep("Failover", "Test rate limit failover")
 	
-	// We need config to specify cooldown duration and retries
 	runCmd.Flags().Set("max-retries", "1")
 	runCmd.Flags().Set("cooldown", "30m")
 	runCmd.Flags().Set("quiet", "true")
 	runCmd.Flags().Set("algorithm", "round_robin")
 	
-	// Reset DB to clear any previous cooldowns
 	db, _ := caamdb.Open()
 	db.ClearAllCooldowns()
 	db.Close()
 	
-	wrap.ExecCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run", "^TestHelperProcess_Run$", "--", name}
+	caamexec.ExecCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cs := []string{" -test.run=^TestHelperProcess_Run$", "--", name}
 		cs = append(cs, args...)
 		cmd := exec.CommandContext(ctx, os.Args[0], cs...)
 		cmd.Env = append(os.Environ(), 
@@ -200,21 +171,10 @@ h.EndStep("Success")
 		return cmd
 	}
 	
-	// Ensure we start with "work" profile active (so failover logic triggers correctly)
-	// We can force this by making "work" the only active profile initially?
-	// Or rely on rotation logic. Rotation prefers healthy profiles. Both are healthy.
-	// We can manually activate "work" first.
-	// runWrap logic: "Select initial profile".
-	// It doesn't necessarily use the currently active one if it thinks another is better?
-	// `rotation.NewSelector` with Smart algo might pick either.
-	// To ensure determism, let's mark "personal" as "used recently" via DB?
-	// Or just rely on the fact that `failover` mode checks file content.
-	
 	err = runWrap(runCmd, []string{"claude", "prompt"})
 	require.NoError(t, err)
 	
-	// Verify "active_profile" is in cooldown
-	db, err = caamdb.Open()
+db, err = caamdb.Open()
 	require.NoError(t, err)
 	defer db.Close()
 	

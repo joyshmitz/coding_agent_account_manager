@@ -150,7 +150,7 @@ Each profile gets its own `$HOME` and `$CODEX_HOME` with symlinks to your real `
 
 ### Gemini CLI (Google One AI Premium)
 
-**Subscription:** Gemini Ultra (~$275/month)
+**Subscription:** Gemini Ultra ($275/month)
 
 **Auth Files:**
 - `~/.gemini/settings.json`
@@ -158,6 +158,8 @@ Each profile gets its own `$HOME` and `$CODEX_HOME` with symlinks to your real `
 - `~/.gemini/.env` (API key mode)
 
 **Login Command:** Start `gemini`, select "Login with Google" or use `/auth` to switch modes
+
+**Notes:** For CAAM, Gemini Ultra behaves like Claude Max and GPT Pro: OAuth tokens are stored locally and can be swapped instantly.
 
 ---
 
@@ -541,7 +543,7 @@ claude "explain this authentication flow"
 
 **Q: Does this work with API keys / pay-per-token plans?**
 
-No. This tool is specifically designed for **fixed-cost subscription plans** like Claude Max ($200/month), GPT Pro ($200/month), and Gemini Ultra (~$275/month). These plans authenticate via OAuth browser flows and store tokens locally. If you're using API keys with usage-based billing, you don't need account switching—you'd just use different API keys.
+No. This tool is specifically designed for **fixed-cost subscription plans** like Claude Max ($200/month), GPT Pro ($200/month), and Gemini Ultra ($275/month). These plans authenticate via OAuth browser flows and store tokens locally. If you're using API keys with usage-based billing, you don't need account switching—you'd just use different API keys.
 
 **Q: Is this against terms of service?**
 
