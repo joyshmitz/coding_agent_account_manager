@@ -36,7 +36,7 @@ type claudeUsageResponse struct {
 }
 
 type claudeWindow struct {
-	Utilization float64 `json:"utilization"` // 0.0 to 1.0
+	Utilization float64 `json:"utilization"` // 0-100 percentage (normalized to 0-1 in parsing)
 	ResetsAt    string  `json:"resets_at"`   // ISO8601 timestamp
 }
 

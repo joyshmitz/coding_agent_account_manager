@@ -383,7 +383,7 @@ func (s *Selector) selectSmart(tool string, profiles []string) (*Result, error) 
 
 		// Factor 4: Real-time rate limit usage (if available)
 		if s.usageData != nil {
-			if usage, ok := s.usageData[p]; ok && usage.Error == "" {
+			if usage, ok := s.usageData[p]; ok && usage != nil && usage.Error == "" {
 				// Use availability score (0-100, higher is better)
 				// Convert to bonus: 100 avail = +100 bonus, 0 avail = -100 penalty
 				usageBonus := float64(usage.AvailScore) - 50 // Center around 0
