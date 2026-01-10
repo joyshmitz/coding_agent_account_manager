@@ -38,10 +38,21 @@ type UsageInfo struct {
 	RateLimitTier string `json:"rate_limit_tier,omitempty"`
 
 	// PrimaryWindow is the main rate limit window (usually shorter).
+	// For Claude: 5-hour rolling window for all models.
 	PrimaryWindow *UsageWindow `json:"primary_window,omitempty"`
 
 	// SecondaryWindow is the secondary window (usually longer).
+	// For Claude: 7-day weekly cap for all models.
 	SecondaryWindow *UsageWindow `json:"secondary_window,omitempty"`
+
+	// TertiaryWindow is an additional window for premium model limits.
+	// For Claude: Opus-specific daily/weekly limits.
+	TertiaryWindow *UsageWindow `json:"tertiary_window,omitempty"`
+
+	// ModelWindows contains per-model rate limit windows.
+	// Key is model name (e.g., "claude-3-opus", "claude-3-sonnet").
+	// Useful when different models have independent limits.
+	ModelWindows map[string]*UsageWindow `json:"model_windows,omitempty"`
 
 	// Credits contains credit balance info (Codex only).
 	Credits *CreditInfo `json:"credits,omitempty"`
@@ -75,22 +86,31 @@ func (u *UsageInfo) AvailabilityScore() int {
 	// Base score starts at 100
 	score := 100.0
 
-	// Primary window is most important (weight: 60%)
+	// Primary window is most important (weight: 50%)
 	if u.PrimaryWindow != nil {
 		primaryUtil := u.PrimaryWindow.Utilization
 		if primaryUtil == 0 && u.PrimaryWindow.UsedPercent > 0 {
 			primaryUtil = float64(u.PrimaryWindow.UsedPercent) / 100.0
 		}
-		score -= primaryUtil * 60
+		score -= primaryUtil * 50
 	}
 
-	// Secondary window (weight: 30%)
+	// Secondary window (weight: 25%)
 	if u.SecondaryWindow != nil {
 		secondaryUtil := u.SecondaryWindow.Utilization
 		if secondaryUtil == 0 && u.SecondaryWindow.UsedPercent > 0 {
 			secondaryUtil = float64(u.SecondaryWindow.UsedPercent) / 100.0
 		}
-		score -= secondaryUtil * 30
+		score -= secondaryUtil * 25
+	}
+
+	// Tertiary window for premium model limits (weight: 15%)
+	if u.TertiaryWindow != nil {
+		tertiaryUtil := u.TertiaryWindow.Utilization
+		if tertiaryUtil == 0 && u.TertiaryWindow.UsedPercent > 0 {
+			tertiaryUtil = float64(u.TertiaryWindow.UsedPercent) / 100.0
+		}
+		score -= tertiaryUtil * 15
 	}
 
 	// Credit availability (weight: 10%)
@@ -131,6 +151,30 @@ func (u *UsageInfo) IsNearLimit(threshold float64) bool {
 		}
 	}
 
+	if u.TertiaryWindow != nil {
+		util := u.TertiaryWindow.Utilization
+		if util == 0 && u.TertiaryWindow.UsedPercent > 0 {
+			util = float64(u.TertiaryWindow.UsedPercent) / 100.0
+		}
+		if util >= threshold {
+			return true
+		}
+	}
+
+	// Check model-specific windows
+	for _, window := range u.ModelWindows {
+		if window == nil {
+			continue
+		}
+		util := window.Utilization
+		if util == 0 && window.UsedPercent > 0 {
+			util = float64(window.UsedPercent) / 100.0
+		}
+		if util >= threshold {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -152,6 +196,21 @@ func (u *UsageInfo) TimeUntilReset() time.Duration {
 		}
 	}
 
+	if u.TertiaryWindow != nil && !u.TertiaryWindow.ResetsAt.IsZero() {
+		if earliest.IsZero() || u.TertiaryWindow.ResetsAt.Before(earliest) {
+			earliest = u.TertiaryWindow.ResetsAt
+		}
+	}
+
+	// Check model-specific windows
+	for _, window := range u.ModelWindows {
+		if window != nil && !window.ResetsAt.IsZero() {
+			if earliest.IsZero() || window.ResetsAt.Before(earliest) {
+				earliest = window.ResetsAt
+			}
+		}
+	}
+
 	if earliest.IsZero() {
 		return 0
 	}
@@ -161,4 +220,56 @@ func (u *UsageInfo) TimeUntilReset() time.Duration {
 		return 0
 	}
 	return ttl
+}
+
+// MostConstrainedWindow returns the window closest to its limit.
+// Returns nil if no windows are available.
+func (u *UsageInfo) MostConstrainedWindow() *UsageWindow {
+	if u == nil {
+		return nil
+	}
+
+	var mostConstrained *UsageWindow
+	var highestUtil float64
+
+	checkWindow := func(w *UsageWindow) {
+		if w == nil {
+			return
+		}
+		util := w.Utilization
+		if util == 0 && w.UsedPercent > 0 {
+			util = float64(w.UsedPercent) / 100.0
+		}
+		if mostConstrained == nil || util > highestUtil {
+			mostConstrained = w
+			highestUtil = util
+		}
+	}
+
+	checkWindow(u.PrimaryWindow)
+	checkWindow(u.SecondaryWindow)
+	checkWindow(u.TertiaryWindow)
+
+	for _, w := range u.ModelWindows {
+		checkWindow(w)
+	}
+
+	return mostConstrained
+}
+
+// WindowForModel returns the rate limit window for a specific model.
+// Falls back to TertiaryWindow if no model-specific window exists.
+func (u *UsageInfo) WindowForModel(model string) *UsageWindow {
+	if u == nil {
+		return nil
+	}
+
+	if u.ModelWindows != nil {
+		if w, ok := u.ModelWindows[model]; ok {
+			return w
+		}
+	}
+
+	// Fall back to tertiary (premium model) window
+	return u.TertiaryWindow
 }
