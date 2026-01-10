@@ -191,8 +191,8 @@ var configPathCmd = &cobra.Command{
 // getConfigValue retrieves a value from the config by key path.
 func getConfigValue(cfg *config.SPMConfig, key string) (string, error) {
 	parts := strings.Split(key, ".")
-	if len(parts) < 1 || len(parts) > 2 {
-		return "", fmt.Errorf("invalid key format: %s (use section.key)", key)
+	if len(parts) < 1 || len(parts) > 3 {
+		return "", fmt.Errorf("invalid key format: %s (use section.key or section.subsection.key)", key)
 	}
 
 	// Handle top-level keys
@@ -208,6 +208,22 @@ func getConfigValue(cfg *config.SPMConfig, key string) (string, error) {
 	section := parts[0]
 	field := parts[1]
 
+	// Handle nested sections (3 parts)
+	if len(parts) == 3 {
+		subfield := parts[2]
+		switch section {
+		case "alerts":
+			if field == "notifications" {
+				return getNotificationsValue(&cfg.Alerts.Notifications, subfield)
+			}
+		case "daemon":
+			if field == "auth_pool" {
+				return getAuthPoolValue(&cfg.Daemon.AuthPool, subfield)
+			}
+		}
+		return "", fmt.Errorf("unknown nested key: %s", key)
+	}
+
 	switch section {
 	case "health":
 		return getHealthValue(&cfg.Health, field)
@@ -217,6 +233,12 @@ func getConfigValue(cfg *config.SPMConfig, key string) (string, error) {
 		return getRuntimeValue(&cfg.Runtime, field)
 	case "project":
 		return getProjectValue(&cfg.Project, field)
+	case "alerts":
+		return getAlertsValue(&cfg.Alerts, field)
+	case "handoff":
+		return getHandoffValue(&cfg.Handoff, field)
+	case "daemon":
+		return getDaemonValue(&cfg.Daemon, field)
 	default:
 		return "", fmt.Errorf("unknown section: %s", section)
 	}
@@ -276,11 +298,80 @@ func getProjectValue(p *config.ProjectConfig, field string) (string, error) {
 	}
 }
 
+func getAlertsValue(a *config.AlertConfig, field string) (string, error) {
+	switch field {
+	case "enabled":
+		return strconv.FormatBool(a.Enabled), nil
+	case "warning_threshold":
+		return strconv.Itoa(a.WarningThreshold), nil
+	case "critical_threshold":
+		return strconv.Itoa(a.CriticalThreshold), nil
+	default:
+		return "", fmt.Errorf("unknown alerts field: %s", field)
+	}
+}
+
+func getNotificationsValue(n *config.NotificationConfig, field string) (string, error) {
+	switch field {
+	case "terminal":
+		return strconv.FormatBool(n.Terminal), nil
+	case "desktop":
+		return strconv.FormatBool(n.Desktop), nil
+	case "webhook":
+		return n.Webhook, nil
+	default:
+		return "", fmt.Errorf("unknown notifications field: %s", field)
+	}
+}
+
+func getHandoffValue(h *config.HandoffConfig, field string) (string, error) {
+	switch field {
+	case "auto_trigger":
+		return strconv.FormatBool(h.AutoTrigger), nil
+	case "debounce_delay":
+		return h.DebounceDelay.String(), nil
+	case "max_retries":
+		return strconv.Itoa(h.MaxRetries), nil
+	case "fallback_to_manual":
+		return strconv.FormatBool(h.FallbackToManual), nil
+	default:
+		return "", fmt.Errorf("unknown handoff field: %s", field)
+	}
+}
+
+func getDaemonValue(d *config.DaemonConfig, field string) (string, error) {
+	switch field {
+	case "check_interval":
+		return d.CheckInterval.String(), nil
+	case "refresh_threshold":
+		return d.RefreshThreshold.String(), nil
+	case "verbose":
+		return strconv.FormatBool(d.Verbose), nil
+	default:
+		return "", fmt.Errorf("unknown daemon field: %s", field)
+	}
+}
+
+func getAuthPoolValue(a *config.AuthPoolConfig, field string) (string, error) {
+	switch field {
+	case "enabled":
+		return strconv.FormatBool(a.Enabled), nil
+	case "max_concurrent_refresh":
+		return strconv.Itoa(a.MaxConcurrentRefresh), nil
+	case "refresh_retry_delay":
+		return a.RefreshRetryDelay.String(), nil
+	case "max_refresh_retries":
+		return strconv.Itoa(a.MaxRefreshRetries), nil
+	default:
+		return "", fmt.Errorf("unknown auth_pool field: %s", field)
+	}
+}
+
 // setConfigValue sets a value in the config by key path.
 func setConfigValue(cfg *config.SPMConfig, key, value string) error {
 	parts := strings.Split(key, ".")
-	if len(parts) < 1 || len(parts) > 2 {
-		return fmt.Errorf("invalid key format: %s (use section.key)", key)
+	if len(parts) < 1 || len(parts) > 3 {
+		return fmt.Errorf("invalid key format: %s (use section.key or section.subsection.key)", key)
 	}
 
 	// Handle top-level keys
@@ -301,6 +392,22 @@ func setConfigValue(cfg *config.SPMConfig, key, value string) error {
 	section := parts[0]
 	field := parts[1]
 
+	// Handle nested sections (3 parts)
+	if len(parts) == 3 {
+		subfield := parts[2]
+		switch section {
+		case "alerts":
+			if field == "notifications" {
+				return setNotificationsValue(&cfg.Alerts.Notifications, subfield, value)
+			}
+		case "daemon":
+			if field == "auth_pool" {
+				return setAuthPoolValue(&cfg.Daemon.AuthPool, subfield, value)
+			}
+		}
+		return fmt.Errorf("unknown nested key: %s", key)
+	}
+
 	switch section {
 	case "health":
 		return setHealthValue(&cfg.Health, field, value)
@@ -310,6 +417,12 @@ func setConfigValue(cfg *config.SPMConfig, key, value string) error {
 		return setRuntimeValue(&cfg.Runtime, field, value)
 	case "project":
 		return setProjectValue(&cfg.Project, field, value)
+	case "alerts":
+		return setAlertsValue(&cfg.Alerts, field, value)
+	case "handoff":
+		return setHandoffValue(&cfg.Handoff, field, value)
+	case "daemon":
+		return setDaemonValue(&cfg.Daemon, field, value)
 	default:
 		return fmt.Errorf("unknown section: %s", section)
 	}
@@ -421,6 +534,144 @@ func setProjectValue(p *config.ProjectConfig, field, value string) error {
 		p.AutoActivate = b
 	default:
 		return fmt.Errorf("unknown project field: %s", field)
+	}
+	return nil
+}
+
+func setAlertsValue(a *config.AlertConfig, field, value string) error {
+	switch field {
+	case "enabled":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		a.Enabled = b
+	case "warning_threshold":
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid integer: %w", err)
+		}
+		a.WarningThreshold = i
+	case "critical_threshold":
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid integer: %w", err)
+		}
+		a.CriticalThreshold = i
+	default:
+		return fmt.Errorf("unknown alerts field: %s", field)
+	}
+	return nil
+}
+
+func setNotificationsValue(n *config.NotificationConfig, field, value string) error {
+	switch field {
+	case "terminal":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		n.Terminal = b
+	case "desktop":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		n.Desktop = b
+	case "webhook":
+		n.Webhook = value
+	default:
+		return fmt.Errorf("unknown notifications field: %s", field)
+	}
+	return nil
+}
+
+func setHandoffValue(h *config.HandoffConfig, field, value string) error {
+	switch field {
+	case "auto_trigger":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		h.AutoTrigger = b
+	case "debounce_delay":
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid duration: %w", err)
+		}
+		h.DebounceDelay = config.Duration(d)
+	case "max_retries":
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid integer: %w", err)
+		}
+		h.MaxRetries = i
+	case "fallback_to_manual":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		h.FallbackToManual = b
+	default:
+		return fmt.Errorf("unknown handoff field: %s", field)
+	}
+	return nil
+}
+
+func setDaemonValue(d *config.DaemonConfig, field, value string) error {
+	switch field {
+	case "check_interval":
+		dur, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid duration: %w", err)
+		}
+		d.CheckInterval = config.Duration(dur)
+	case "refresh_threshold":
+		dur, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid duration: %w", err)
+		}
+		d.RefreshThreshold = config.Duration(dur)
+	case "verbose":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		d.Verbose = b
+	default:
+		return fmt.Errorf("unknown daemon field: %s", field)
+	}
+	return nil
+}
+
+func setAuthPoolValue(a *config.AuthPoolConfig, field, value string) error {
+	switch field {
+	case "enabled":
+		b, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		a.Enabled = b
+	case "max_concurrent_refresh":
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid integer: %w", err)
+		}
+		a.MaxConcurrentRefresh = i
+	case "refresh_retry_delay":
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid duration: %w", err)
+		}
+		a.RefreshRetryDelay = config.Duration(d)
+	case "max_refresh_retries":
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid integer: %w", err)
+		}
+		a.MaxRefreshRetries = i
+	default:
+		return fmt.Errorf("unknown auth_pool field: %s", field)
 	}
 	return nil
 }

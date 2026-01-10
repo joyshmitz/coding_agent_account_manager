@@ -24,22 +24,19 @@ func TestDaemonLifecycle(t *testing.T) {
 	h.StartStep("Setup", "Initialize environment")
 	rootDir := h.TempDir
 	
-	pidFile := filepath.Join(os.TempDir(), "caam-daemon.pid") // Default PID location
-	// Wait, daemon.go uses os.TempDir() for PID file?
-	// func PIDFilePath() string { return filepath.Join(os.TempDir(), "caam-daemon.pid") }
-	// This is not configurable via env var! This is a problem for parallel tests.
-	// But tests run sequentially?
-	// However, if I run this on a shared system, it might conflict with real daemon?
-	// Real daemon uses os.TempDir().
+	// Create config with explicit PID file path for isolation
+	configDir := filepath.Join(rootDir, "caam")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+	configPath := filepath.Join(configDir, "config.yaml")
+	pidFile := filepath.Join(rootDir, "caam-daemon.pid")
 	
-	// I should verify if I can change PID file location.
-	// internal/daemon/daemon.go: PIDFilePath() uses os.TempDir().
-	// It does NOT respect XDG_RUNTIME_DIR or similar?
-	
-	// I should probably fix that in daemon.go first to make it testable/safe.
-	// But assuming I can't change it right now, I have to ensure no other daemon is running.
-	
-	// Let's assume sequential execution and no real daemon.
+	initialConfig := fmt.Sprintf(`
+runtime:
+  pid_file: %s
+daemon:
+  verbose: true
+`, pidFile)
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0600))
 	
 	// Set up environment for the subprocess
 	env := os.Environ()

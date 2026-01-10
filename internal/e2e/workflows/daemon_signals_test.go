@@ -22,20 +22,20 @@ func TestDaemonSignals(t *testing.T) {
 	// 1. Setup
 	h.StartStep("Setup", "Initialize environment")
 	rootDir := h.TempDir
-	pidFile := filepath.Join(os.TempDir(), "caam-daemon.pid")
-	_ = os.Remove(pidFile) // Ensure stale file is gone
+	pidFile := filepath.Join(rootDir, "caam-daemon.pid")
 	
 	// Create config file with initial settings
 	configDir := filepath.Join(rootDir, "caam")
 	require.NoError(t, os.MkdirAll(configDir, 0755))
 	configPath := filepath.Join(configDir, "config.yaml")
 	
-	initialConfig := `
+	initialConfig := fmt.Sprintf(`
 runtime:
   reload_on_sighup: true
+  pid_file: %s
 daemon:
   verbose: false
-`
+`, pidFile)
 	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0600))
 	
 	env := os.Environ()

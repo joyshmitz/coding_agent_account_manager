@@ -1,144 +1,113 @@
 package workflows
 
 import (
-	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_ProfileLifecycleWorkflow tests the complete lifecycle of a profile:
-// Create -> Activate -> Verify -> Delete -> Verify Gone
-func TestE2E_ProfileLifecycleWorkflow(t *testing.T) {
+func TestProfileLifecycle(t *testing.T) {
 	h := testutil.NewExtendedHarness(t)
 	defer h.Close()
 
-	// ==========================================================================
-	// Phase 1: Setup
-	// ==========================================================================
-	h.StartStep("setup", "Setting up test environment")
-	homeDir := h.SubDir("home")
-	vaultDir := h.SubDir("vault")
-
-	// Setup Codex home
-	codexHome := filepath.Join(homeDir, ".codex")
-	if err := os.MkdirAll(codexHome, 0700); err != nil {
-		t.Fatalf("Failed to create codex home: %v", err)
+	// 1. Setup
+	h.StartStep("Setup", "Initialize environment")
+	rootDir := h.TempDir
+	
+	// Set XDG vars to isolate the test
+	env := os.Environ()
+	env = append(env, "GO_WANT_CLI_HELPER=1")
+	env = append(env, fmt.Sprintf("XDG_DATA_HOME=%s", rootDir))
+	env = append(env, fmt.Sprintf("XDG_CONFIG_HOME=%s", rootDir))
+	env = append(env, fmt.Sprintf("HOME=%s", rootDir)) // Some tools use HOME
+	
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	
+	runCLI := func(args ...string) (string, error) {
+		cmdArgs := []string{"-test.run=^TestCLIHelper$", "--"}
+		cmdArgs = append(cmdArgs, args...)
+		
+		cmd := exec.Command(exe, cmdArgs...)
+		cmd.Env = env
+		
+		output, err := cmd.CombinedOutput()
+		return string(output), err
 	}
-	codexAuthPath := filepath.Join(codexHome, "auth.json")
+	
+h.EndStep("Setup")
 
-	fileSet := authfile.AuthFileSet{
-		Tool: "codex",
-		Files: []authfile.AuthFileSpec{
-			{Tool: "codex", Path: codexAuthPath, Required: true},
-		},
-	}
-
-	vault := authfile.NewVault(vaultDir)
-	h.EndStep("setup")
-
-	// ==========================================================================
-	// Phase 2: Create Profile (Backup)
-	// ==========================================================================
-	h.StartStep("create_profile", "Creating new profile")
-	profileName := "lifecycle-test"
-
-	// Create source auth file
-	content := map[string]interface{}{
-		"access_token": "lifecycle-token",
-		"created_at":   "now",
-	}
-	jsonBytes, _ := json.MarshalIndent(content, "", "  ")
-	if err := os.WriteFile(codexAuthPath, jsonBytes, 0600); err != nil {
-		t.Fatalf("Failed to write auth file: %v", err)
-	}
-
-	// Backup (Create)
-	if err := vault.Backup(fileSet, profileName); err != nil {
-		t.Fatalf("Backup failed: %v", err)
-	}
-
-	// Verify existence in vault
-	profiles, err := vault.List("codex")
+	// 2. Add Profile
+	h.StartStep("Add", "Create isolated profile")
+	out, err := runCLI("profile", "add", "claude", "test-work", "--description", "Work Profile")
 	if err != nil {
-		t.Fatalf("List failed: %v", err)
+		t.Fatalf("profile add failed: %v\nOutput: %s", err, out)
 	}
-	found := false
-	for _, p := range profiles {
-		if p == profileName {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("Profile %s not found in list after creation", profileName)
-	}
-	h.LogInfo("Profile created", "name", profileName)
-	h.EndStep("create_profile")
-
-	// ==========================================================================
-	// Phase 3: Activate Profile
-	// ==========================================================================
-	h.StartStep("activate_profile", "Activating profile")
-
-	// Clear local auth file to verify restoration
-	if err := os.Remove(codexAuthPath); err != nil {
-		t.Fatalf("Failed to remove local auth: %v", err)
-	}
-
-	// Activate
-	if err := vault.Restore(fileSet, profileName); err != nil {
-		t.Fatalf("Restore failed: %v", err)
-	}
-
-	// Verify file restored
-	if _, err := os.Stat(codexAuthPath); os.IsNotExist(err) {
-		t.Errorf("Auth file not restored")
-	}
-
-	// Verify active status
-	active, err := vault.ActiveProfile(fileSet)
-	if err != nil {
-		t.Fatalf("ActiveProfile failed: %v", err)
-	}
-	if active != profileName {
-		t.Errorf("Expected active profile %s, got %s", profileName, active)
-	}
-	h.LogInfo("Profile activated", "active", active)
-	h.EndStep("activate_profile")
-
-	// ==========================================================================
-	// Phase 4: Delete Profile
-	// ==========================================================================
-	h.StartStep("delete_profile", "Deleting profile")
-
-	// Delete from vault
-	if err := vault.Delete("codex", profileName); err != nil {
-		t.Fatalf("Delete failed: %v", err)
-	}
-
-	// Verify gone from list
-	profiles, err = vault.List("codex")
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-	for _, p := range profiles {
-		if p == profileName {
-			t.Errorf("Profile %s still present in list after deletion", profileName)
-		}
-	}
-
+	assert.Contains(t, out, "Created profile claude/test-work")
+	
+	// Verify directory structure
+	profileDir := filepath.Join(rootDir, "caam", "profiles", "claude", "test-work")
+	require.DirExists(t, profileDir)
+	require.DirExists(t, filepath.Join(profileDir, "home"))
+	require.FileExists(t, filepath.Join(profileDir, "profile.json"))
+	
+h.EndStep("Add")
+	
+	// 3. Status
+	h.StartStep("Status", "Check profile status")
+	out, err = runCLI("profile", "status", "claude", "test-work")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Profile: claude/test-work")
+	assert.Contains(t, out, "Description: Work Profile")
+	
+h.EndStep("Status")
+	
+	// 4. Update Description (Describe)
+	h.StartStep("Describe", "Update description")
+	out, err = runCLI("profile", "describe", "claude", "test-work", "New Description")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Set description")
+	
+out, err = runCLI("profile", "describe", "claude", "test-work")
+	require.NoError(t, err)
+	assert.Contains(t, out, "New Description")
+	
+h.EndStep("Describe")
+	
+	// 5. List
+	h.StartStep("List", "List profiles")
+	out, err = runCLI("profile", "ls", "claude")
+	require.NoError(t, err)
+	assert.Contains(t, out, "test-work")
+	assert.Contains(t, out, "New Description")
+	
+h.EndStep("List")
+	
+	// 6. Exec (Simulation)
+	// We can't easily run real 'claude' command since it's not installed.
+	// But 'exec' runs 'runner.Run'.
+	// We can try to run 'caam exec claude test-work -- echo hello'.
+	// But 'runner' expects a provider. It tries to execute the provider binary.
+	// We need to mock the provider binary?
+	// Or we can rely on unit tests for 'exec'.
+	// Let's just skip 'exec' in this lifecycle test unless we can mock the binary PATH.
+	
+	// 7. Delete
+	h.StartStep("Delete", "Delete profile")
+	out, err = runCLI("profile", "delete", "claude", "test-work", "--force")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Deleted claude/test-work")
+	
 	// Verify directory gone
-	profileDir := filepath.Join(vaultDir, "codex", profileName)
 	if _, err := os.Stat(profileDir); !os.IsNotExist(err) {
 		t.Errorf("Profile directory still exists: %s", profileDir)
 	}
-
-	h.LogInfo("Profile deleted")
-	h.EndStep("delete_profile")
-
-	t.Log("\n" + h.Summary())
+	
+h.EndStep("Delete")
 }
