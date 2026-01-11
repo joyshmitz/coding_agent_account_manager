@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -216,24 +217,22 @@ func runWrap(cmd *cobra.Command, args []string) error {
 	// Load profile object
 	prof, err := profileStore.Load(tool, activeProfileName)
 	if err != nil {
-		// If profile object doesn't exist (only in vault), create a transient one
-		// or try to create it.
-		// profileStore requires directory.
-		// Maybe we should use profileStore.Create/Load logic safely.
-		// For now, assume it might not exist in profileStore if it was just a vault backup.
-		// But runner needs *profile.Profile.
-		// profile.Profile contains paths.
-		
-		// If it doesn't exist in profile store (isolated profiles), we are running in "vault mode".
-		// In vault mode, we don't use isolated HOME usually.
-		// But exec.Runner logic uses opts.Profile to set up env.
-		
-		// We can create a dummy profile object for the Runner.
-		// Runner uses: Name, BasePath (if set), AuthMode.
+		// If profile object doesn't exist (only in vault), create a transient one.
+		// We need a proper BasePath for locking to work correctly - otherwise
+		// the lock file ends up in the current directory which causes issues
+		// when multiple runs use the same profile.
+		var basePath string
+		if profileStore != nil {
+			basePath = profileStore.ProfilePath(tool, activeProfileName)
+		} else {
+			// Fallback: use default store path
+			basePath = filepath.Join(profile.DefaultStorePath(), tool, activeProfileName)
+		}
 		prof = &profile.Profile{
 			Name:     activeProfileName,
 			Provider: tool,
 			AuthMode: "oauth", // Assumption
+			BasePath: basePath,
 		}
 	}
 

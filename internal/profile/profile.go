@@ -196,6 +196,14 @@ func (p *Profile) IsLocked() bool {
 func (p *Profile) Lock() error {
 	lockPath := p.LockPath()
 
+	// Ensure the parent directory exists (for transient profiles that may not
+	// have been formally created via Profile.Save())
+	if p.BasePath != "" {
+		if err := os.MkdirAll(p.BasePath, 0700); err != nil {
+			return fmt.Errorf("create profile dir for lock: %w", err)
+		}
+	}
+
 	// Use O_EXCL to atomically check and create - prevents TOCTOU race
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
