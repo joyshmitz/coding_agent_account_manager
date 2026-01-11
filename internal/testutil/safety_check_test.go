@@ -63,6 +63,7 @@ func TestNoRealHomeWrites(t *testing.T) {
 		"internal/logs/claude_test.go":             true, // Uses t.TempDir(); UserHomeDir only for path verification
 		"internal/logs/codex_test.go":              true, // Uses t.TempDir(); UserHomeDir only for path verification
 		"internal/logs/gemini_test.go":             true, // Uses t.TempDir(); UserHomeDir only for path verification
+		"internal/health/expiry_test.go":           true, // UserHomeDir only for path verification, no writes
 	}
 
 	var violations []string

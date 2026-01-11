@@ -22,6 +22,7 @@ import (
 	caamdb "github.com/Dicklesworthstone/coding_agent_account_manager/internal/db"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/exec"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/identity"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/passthrough"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/profile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/project"
@@ -187,6 +188,11 @@ func isTerminal() bool {
 
 // getProfileHealth returns health info for a profile by parsing auth files and checking metadata.
 func getProfileHealth(tool, profileName string) *health.ProfileHealth {
+	ph, _ := getProfileHealthWithIdentity(tool, profileName)
+	return ph
+}
+
+func buildProfileHealth(tool, profileName string) *health.ProfileHealth {
 	// Start with stored health data (for error counts, penalties, and fallback expiry)
 	ph := &health.ProfileHealth{}
 	if healthStore != nil {
@@ -220,6 +226,122 @@ func getProfileHealth(tool, profileName string) *health.ProfileHealth {
 	}
 
 	return ph
+}
+
+func getProfileHealthWithIdentity(tool, profileName string) (*health.ProfileHealth, *identity.Identity) {
+	ph := buildProfileHealth(tool, profileName)
+	id := getVaultIdentity(tool, profileName)
+	applyIdentityToHealth(tool, profileName, ph, id)
+	return ph, id
+}
+
+func getVaultIdentity(tool, profileName string) *identity.Identity {
+	if vault == nil {
+		return nil
+	}
+	vaultPath := vault.ProfilePath(tool, profileName)
+
+	switch tool {
+	case "codex":
+		id, err := identity.ExtractFromCodexAuth(filepath.Join(vaultPath, "auth.json"))
+		if err != nil {
+			return nil
+		}
+		normalizeIdentityPlan(id)
+		return id
+	case "claude":
+		id, err := identity.ExtractFromClaudeCredentials(filepath.Join(vaultPath, ".credentials.json"))
+		if err != nil {
+			return nil
+		}
+		normalizeIdentityPlan(id)
+		return id
+	case "gemini":
+		candidates := []string{
+			filepath.Join(vaultPath, "settings.json"),
+			filepath.Join(vaultPath, "oauth_credentials.json"),
+		}
+		for _, path := range candidates {
+			id, err := identity.ExtractFromGeminiConfig(path)
+			if err != nil {
+				continue
+			}
+			normalizeIdentityPlan(id)
+			return id
+		}
+	}
+
+	return nil
+}
+
+func applyIdentityToHealth(tool, profileName string, ph *health.ProfileHealth, id *identity.Identity) {
+	if ph == nil || id == nil {
+		return
+	}
+	if id.PlanType == "" {
+		return
+	}
+	normalized := normalizePlanType(id.PlanType)
+	if normalized == "" {
+		return
+	}
+	ph.PlanType = normalized
+	if healthStore != nil {
+		_ = healthStore.SetPlanType(tool, profileName, normalized)
+	}
+}
+
+func normalizeIdentityPlan(id *identity.Identity) {
+	if id == nil {
+		return
+	}
+	normalized := normalizePlanType(id.PlanType)
+	if normalized != "" {
+		id.PlanType = normalized
+	}
+}
+
+func primePlanTypes(tool string, profiles []string) {
+	if healthStore == nil {
+		return
+	}
+	for _, profileName := range profiles {
+		id := getVaultIdentity(tool, profileName)
+		if id == nil {
+			continue
+		}
+		applyIdentityToHealth(tool, profileName, &health.ProfileHealth{}, id)
+	}
+}
+
+func normalizePlanType(planType string) string {
+	plan := strings.ToLower(strings.TrimSpace(planType))
+	switch plan {
+	case "max", "ultra", "plus", "premium":
+		return "pro"
+	case "enterprise", "team", "pro", "free":
+		return plan
+	default:
+		return plan
+	}
+}
+
+func formatIdentityDisplay(id *identity.Identity) (string, string) {
+	email := "unknown"
+	plan := "unknown"
+	if id == nil {
+		return email, plan
+	}
+	if strings.TrimSpace(id.Email) != "" {
+		email = id.Email
+	}
+	if strings.TrimSpace(id.PlanType) != "" {
+		formatted := health.FormatPlanType(id.PlanType)
+		if formatted != "" {
+			plan = formatted
+		}
+	}
+	return email, plan
 }
 
 // getCooldownString returns a formatted string showing cooldown remaining time.
@@ -482,11 +604,12 @@ type statusOutput struct {
 }
 
 type statusTool struct {
-	Tool          string        `json:"tool"`
-	LoggedIn      bool          `json:"logged_in"`
-	ActiveProfile string        `json:"active_profile,omitempty"`
-	Error         string        `json:"error,omitempty"`
-	Health        *statusHealth `json:"health,omitempty"`
+	Tool          string             `json:"tool"`
+	LoggedIn      bool               `json:"logged_in"`
+	ActiveProfile string             `json:"active_profile,omitempty"`
+	Error         string             `json:"error,omitempty"`
+	Health        *statusHealth      `json:"health,omitempty"`
+	Identity      *identity.Identity `json:"identity,omitempty"`
 }
 
 type statusHealth struct {
@@ -539,6 +662,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if !jsonOutput {
 		fmt.Println("Active Profiles")
 		fmt.Println("───────────────────────────────────────────────────")
+		fmt.Printf("%-10s  %-20s  %-24s  %-10s  %s\n", "TOOL", "PROFILE", "EMAIL", "PLAN", "STATUS")
 	}
 
 	for _, tool := range toolsToCheck {
@@ -583,8 +707,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Get health info
-		ph := getProfileHealth(tool, activeProfile)
+		// Get health and identity info
+		ph, id := getProfileHealthWithIdentity(tool, activeProfile)
 		status := health.CalculateStatus(ph)
 
 		if jsonOutput {
@@ -592,6 +716,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				Tool:          tool,
 				LoggedIn:      true,
 				ActiveProfile: activeProfile,
+				Identity:      id,
 				Health: &statusHealth{
 					Status:     status.String(),
 					ErrorCount: ph.ErrorCount1h,
@@ -608,6 +733,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			output.Tools = append(output.Tools, st)
 		} else {
 			healthStr := health.FormatStatusWithReason(status, ph, formatOpts)
+			email, plan := formatIdentityDisplay(id)
 
 			// Check for active cooldown and append remaining time
 			cooldownStr := getCooldownString(tool, activeProfile, formatOpts)
@@ -615,7 +741,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				healthStr = healthStr + " " + cooldownStr
 			}
 
-			fmt.Printf("%-10s  %-20s  %s\n", tool, activeProfile, healthStr)
+			fmt.Printf("%-10s  %-20s  %-24s  %-10s  %s\n", tool, activeProfile, email, plan, healthStr)
 		}
 
 		// Collect warnings
@@ -678,11 +804,12 @@ type lsOutput struct {
 }
 
 type lsProfile struct {
-	Tool   string   `json:"tool"`
-	Name   string   `json:"name"`
-	Active bool     `json:"active"`
-	System bool     `json:"system"`
-	Health lsHealth `json:"health"`
+	Tool     string             `json:"tool"`
+	Name     string             `json:"name"`
+	Active   bool               `json:"active"`
+	System   bool               `json:"system"`
+	Health   lsHealth           `json:"health"`
+	Identity *identity.Identity `json:"identity,omitempty"`
 }
 
 type lsHealth struct {
@@ -770,12 +897,16 @@ func runLs(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 
+		if !jsonOutput {
+			fmt.Printf("%-22s  %-24s  %-10s  %s\n", "PROFILE", "EMAIL", "PLAN", "STATUS")
+		}
+
 		// Check which is active
 		fileSet := tools[tool]()
 		activeProfile, _ := vault.ActiveProfile(fileSet)
 
 		for _, p := range profiles {
-			ph := getProfileHealth(tool, p)
+			ph, id := getProfileHealthWithIdentity(tool, p)
 			status := health.CalculateStatus(ph)
 
 			if jsonOutput {
@@ -788,6 +919,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 						Status:     status.String(),
 						ErrorCount: ph.ErrorCount1h,
 					},
+					Identity: id,
 				}
 				if !ph.TokenExpiresAt.IsZero() {
 					lp.Health.ExpiresAt = ph.TokenExpiresAt.Format(time.RFC3339)
@@ -799,13 +931,14 @@ func runLs(cmd *cobra.Command, args []string) error {
 					marker = "● "
 				}
 
-				tag := ""
+				displayName := p
 				if authfile.IsSystemProfile(p) {
-					tag = "[system]"
+					displayName = fmt.Sprintf("%s [system]", p)
 				}
 
+				email, plan := formatIdentityDisplay(id)
 				healthStr := health.FormatHealthStatus(status, ph, formatOpts)
-				fmt.Printf("%s%-20s  %-8s  %s\n", marker, p, tag, healthStr)
+				fmt.Printf("%s%-20s  %-24s  %-10s  %s\n", marker, displayName, email, plan, healthStr)
 			}
 		}
 
@@ -862,10 +995,11 @@ func runLs(cmd *cobra.Command, args []string) error {
 
 		if !jsonOutput {
 			fmt.Printf("%s:\n", tool)
+			fmt.Printf("  %-20s  %-24s  %-10s  %s\n", "PROFILE", "EMAIL", "PLAN", "STATUS")
 		}
 
 		for _, p := range profiles {
-			ph := getProfileHealth(tool, p)
+			ph, id := getProfileHealthWithIdentity(tool, p)
 			status := health.CalculateStatus(ph)
 
 			if jsonOutput {
@@ -878,6 +1012,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 						Status:     status.String(),
 						ErrorCount: ph.ErrorCount1h,
 					},
+					Identity: id,
 				}
 				if !ph.TokenExpiresAt.IsZero() {
 					lp.Health.ExpiresAt = ph.TokenExpiresAt.Format(time.RFC3339)
@@ -889,13 +1024,14 @@ func runLs(cmd *cobra.Command, args []string) error {
 					marker = "● "
 				}
 
-				tag := ""
+				displayName := p
 				if authfile.IsSystemProfile(p) {
-					tag = "[system]"
+					displayName = fmt.Sprintf("%s [system]", p)
 				}
 
+				email, plan := formatIdentityDisplay(id)
 				healthStr := health.FormatHealthStatus(status, ph, formatOpts)
-				fmt.Printf("  %s%-20s  %-8s  %s\n", marker, p, tag, healthStr)
+				fmt.Printf("  %s%-20s  %-24s  %-10s  %s\n", marker, displayName, email, plan, healthStr)
 			}
 		}
 	}

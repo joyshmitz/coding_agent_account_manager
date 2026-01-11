@@ -320,31 +320,34 @@ func (v *Vault) Backup(fileSet AuthFileSet, profile string) error {
 	}
 
 	// Atomic write: write to temp file, fsync, then rename
-	tmpPath := metaPath + ".tmp"
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	dir := filepath.Dir(metaPath)
+	f, err := os.CreateTemp(dir, "meta.json.tmp.*")
 	if err != nil {
 		return fmt.Errorf("create temp metadata file: %w", err)
 	}
+	tmpPath := f.Name()
+	defer os.Remove(tmpPath)
 
 	if _, err := f.Write(raw); err != nil {
 		f.Close()
-		os.Remove(tmpPath)
 		return fmt.Errorf("write temp metadata file: %w", err)
+	}
+
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return fmt.Errorf("chmod temp metadata file: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
 		f.Close()
-		os.Remove(tmpPath)
 		return fmt.Errorf("sync temp metadata file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("close temp metadata file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, metaPath); err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("rename metadata file: %w", err)
 	}
 
@@ -675,7 +678,8 @@ func ClearAuthFiles(fileSet AuthFileSet) error {
 
 func copyFile(src, dst string) error {
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
@@ -685,27 +689,35 @@ func copyFile(src, dst string) error {
 	}
 	defer srcFile.Close()
 
-	// Create temp file for atomic write
-	tmpPath := dst + ".tmp"
-	dstFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	// Create temp file for atomic write using CreateTemp to avoid races
+	// Pattern: filename.tmp.RANDOM
+	dstFile, err := os.CreateTemp(dir, filepath.Base(dst)+".tmp.*")
 	if err != nil {
 		return err
 	}
+	tmpPath := dstFile.Name()
+
+	// Ensure cleanup of temp file if something goes wrong.
+	// If rename succeeds, this removal will fail (which is fine).
+	defer os.Remove(tmpPath)
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
 		dstFile.Close()
-		os.Remove(tmpPath)
+		return err
+	}
+
+	// Enforce 0600 permissions for all auth files
+	if err := dstFile.Chmod(0600); err != nil {
+		dstFile.Close()
 		return err
 	}
 
 	if err := dstFile.Sync(); err != nil {
 		dstFile.Close()
-		os.Remove(tmpPath)
 		return err
 	}
 
 	if err := dstFile.Close(); err != nil {
-		os.Remove(tmpPath)
 		return err
 	}
 

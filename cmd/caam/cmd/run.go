@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -265,7 +266,20 @@ func runWrap(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	return smartRunner.Run(ctx, runOptions)
+	err = smartRunner.Run(ctx, runOptions)
+
+	// Handle exit code
+	var exitErr *exec.ExitCodeError
+	if errors.As(err, &exitErr) {
+		// Clean up before exiting
+		if db != nil {
+			db.Close()
+		}
+		cancel()
+		os.Exit(exitErr.Code)
+	}
+
+	return err
 }
 
 // runPrecheck checks current usage levels and switches profile if near limit.

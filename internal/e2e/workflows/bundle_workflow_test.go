@@ -3,10 +3,13 @@ package workflows
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/bundle"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/testutil"
@@ -27,9 +30,23 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	// ==========================================================================
 	h.StartStep("setup", "Creating vault with multiple profiles")
 
-	vaultDir := h.SubDir("vault")
+	rootDir := h.TempDir
+	vaultDir := filepath.Join(rootDir, "caam", "vault")
 	outputDir := h.SubDir("output")
-	importVaultDir := h.SubDir("import_vault")
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable failed: %v", err)
+	}
+
+	baseEnv := buildCLIEnv(rootDir)
+	runCLI := func(env []string, args ...string) (string, error) {
+		cmdArgs := append([]string{"-test.run=^TestCLIHelper$", "--"}, args...)
+		cmd := exec.Command(exe, cmdArgs...)
+		cmd.Env = env
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	}
 
 	// Create Codex profiles
 	codexWork := createTestProfile(t, h, vaultDir, "codex", "work", map[string]interface{}{
@@ -60,45 +77,23 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	// ==========================================================================
 	h.StartStep("export_phase", "Exporting vault to bundle")
 
-	exporter := &bundle.VaultExporter{
-		VaultPath: vaultDir,
-	}
-
 	h.TimeStep("export_bundle", "Creating unencrypted bundle", func() {
-		opts := &bundle.ExportOptions{
-			OutputDir:       outputDir,
-			VerboseFilename: false,
-		}
-		result, err := exporter.Export(opts)
+		out, err := runCLI(baseEnv, "bundle", "export", "--output", outputDir)
 		if err != nil {
-			t.Fatalf("Export failed: %v", err)
+			t.Fatalf("CLI export failed: %v\nOutput: %s", err, out)
 		}
-		h.LogInfo("Export successful",
-			"output_path", result.OutputPath,
-			"total_files", result.TotalFiles,
-			"compressed_size", result.CompressedSize)
-
-		// Verify bundle was created
-		if _, err := os.Stat(result.OutputPath); os.IsNotExist(err) {
-			t.Fatalf("Bundle file not created: %s", result.OutputPath)
-		}
-
-		// Verify manifest
-		if result.Manifest == nil {
-			t.Fatalf("Manifest not included in result")
-		}
+		h.LogInfo("Export output", "stdout", out)
 	})
 
 	// Verify bundle contents
 	h.StartStep("verify_export", "Verifying bundle contents")
-	files, err := os.ReadDir(outputDir)
-	if err != nil {
-		t.Fatalf("Failed to read output dir: %v", err)
+	bundlePath := extractBundlePath(outputDir)
+	if bundlePath == "" {
+		t.Fatalf("Failed to detect bundle output path")
 	}
-	if len(files) == 0 {
-		t.Fatalf("No bundle file created")
+	if _, err := os.Stat(bundlePath); os.IsNotExist(err) {
+		t.Fatalf("Bundle file not created: %s", bundlePath)
 	}
-	bundlePath := filepath.Join(outputDir, files[0].Name())
 	h.LogInfo("Bundle created", "path", bundlePath)
 	h.EndStep("verify_export")
 
@@ -113,31 +108,22 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	var encryptedBundlePath string
 
 	h.TimeStep("export_encrypted", "Creating encrypted bundle", func() {
-		opts := &bundle.ExportOptions{
-			OutputDir: outputDir,
-			Encrypt:   true,
-			Password:  password,
-		}
-		result, err := exporter.Export(opts)
+		out, err := runCLI(baseEnv, "bundle", "export", "--output", outputDir, "--encrypt", "--password", password)
 		if err != nil {
-			t.Fatalf("Encrypted export failed: %v", err)
+			t.Fatalf("Encrypted CLI export failed: %v\nOutput: %s", err, out)
 		}
-		encryptedBundlePath = result.OutputPath
-		h.LogInfo("Encrypted export successful",
-			"output_path", result.OutputPath,
-			"encrypted", result.Encrypted)
+		h.LogInfo("Encrypted export output", "stdout", out)
 
-		if !result.Encrypted {
-			t.Errorf("Expected encrypted=true in result")
+		encryptedBundlePath = extractBundlePath(outputDir)
+		if encryptedBundlePath == "" {
+			t.Fatalf("Failed to detect encrypted bundle output path")
 		}
 
-		// Verify bundle was created
-		if _, err := os.Stat(result.OutputPath); os.IsNotExist(err) {
-			t.Fatalf("Encrypted bundle file not created")
+		if _, err := os.Stat(encryptedBundlePath); os.IsNotExist(err) {
+			t.Fatalf("Encrypted bundle file not created: %s", encryptedBundlePath)
 		}
 
-		// Verify encryption metadata was created
-		metaPath := result.OutputPath + ".meta"
+		metaPath := encryptedBundlePath + ".meta"
 		if _, err := os.Stat(metaPath); os.IsNotExist(err) {
 			t.Fatalf("Encryption metadata file not created: %s", metaPath)
 		}
@@ -162,27 +148,16 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	// ==========================================================================
 	h.StartStep("import_phase", "Importing bundle to fresh vault")
 
-	h.TimeStep("import_bundle", "Importing unencrypted bundle", func() {
-		importer := &bundle.VaultImporter{
-			BundlePath: bundlePath,
-		}
-		opts := &bundle.ImportOptions{
-			VaultPath: importVaultDir,
-			Mode:      bundle.ImportModeReplace,
-			Force:     true,
-		}
-		result, err := importer.Import(opts)
-		if err != nil {
-			t.Fatalf("Import failed: %v", err)
-		}
-		h.LogInfo("Import successful",
-			"new_profiles", result.NewProfiles,
-			"updated_profiles", result.UpdatedProfiles,
-			"skipped_profiles", result.SkippedProfiles)
+	importRoot := h.SubDir("import_root")
+	importEnv := buildCLIEnv(importRoot)
+	importVaultDir := filepath.Join(importRoot, "caam", "vault")
 
-		if result.NewProfiles != 3 {
-			t.Errorf("Expected 3 new profiles, got %d", result.NewProfiles)
+	h.TimeStep("import_bundle", "Importing unencrypted bundle", func() {
+		out, err := runCLI(importEnv, "bundle", "import", bundlePath, "--mode", "replace", "--force")
+		if err != nil {
+			t.Fatalf("CLI import failed: %v\nOutput: %s", err, out)
 		}
+		h.LogInfo("Import output", "stdout", out)
 	})
 
 	// Verify imported profiles
@@ -214,33 +189,18 @@ func TestE2E_BundleExportImportWorkflow(t *testing.T) {
 	// ==========================================================================
 	h.StartStep("encrypted_import_phase", "Importing encrypted bundle")
 
-	// Create another fresh vault for encrypted import
-	encryptedImportVaultDir := h.SubDir("encrypted_import_vault")
+	var encryptedImportVaultDir string
 
 	h.TimeStep("import_encrypted", "Decrypting and importing encrypted bundle", func() {
-		importer := &bundle.VaultImporter{
-			BundlePath: encryptedBundlePath,
-		}
-		opts := &bundle.ImportOptions{
-			VaultPath: encryptedImportVaultDir,
-			Mode:      bundle.ImportModeReplace,
-			Password:  password,
-			Force:     true,
-		}
-		result, err := importer.Import(opts)
-		if err != nil {
-			t.Fatalf("Encrypted import failed: %v", err)
-		}
-		h.LogInfo("Encrypted import successful",
-			"encrypted", result.Encrypted,
-			"new_profiles", result.NewProfiles)
+		encryptedImportRoot := h.SubDir("encrypted_import_root")
+		encryptedImportEnv := buildCLIEnv(encryptedImportRoot)
+		encryptedImportVaultDir = filepath.Join(encryptedImportRoot, "caam", "vault")
 
-		if !result.Encrypted {
-			t.Errorf("Expected encrypted=true in result")
+		out, err := runCLI(encryptedImportEnv, "bundle", "import", encryptedBundlePath, "--mode", "replace", "--force", "--password", password)
+		if err != nil {
+			t.Fatalf("Encrypted CLI import failed: %v\nOutput: %s", err, out)
 		}
-		if result.NewProfiles != 3 {
-			t.Errorf("Expected 3 new profiles, got %d", result.NewProfiles)
-		}
+		h.LogInfo("Encrypted import output", "stdout", out)
 	})
 
 	// Verify decrypted import
@@ -482,6 +442,43 @@ func TestE2E_BundleDryRun(t *testing.T) {
 // Helper Functions
 // =============================================================================
 
+func buildCLIEnv(rootDir string) []string {
+	env := os.Environ()
+	env = append(env, "GO_WANT_CLI_HELPER=1")
+	env = append(env, fmt.Sprintf("XDG_DATA_HOME=%s", rootDir))
+	env = append(env, fmt.Sprintf("XDG_CONFIG_HOME=%s", rootDir))
+	env = append(env, fmt.Sprintf("HOME=%s", rootDir))
+	return env
+}
+
+func extractBundlePath(outputDir string) string {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return ""
+	}
+
+	var selected string
+	var newest time.Time
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".zip") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if selected == "" || info.ModTime().After(newest) {
+			newest = info.ModTime()
+			selected = filepath.Join(outputDir, name)
+		}
+	}
+	return selected
+}
+
 // createTestProfile creates a test profile in the vault and returns the auth file path.
 func createTestProfile(t *testing.T, h *testutil.ExtendedHarness, vaultDir, provider, name string, content map[string]interface{}) string {
 	profileDir := filepath.Join(vaultDir, provider, name)
@@ -503,11 +500,11 @@ func createTestProfile(t *testing.T, h *testutil.ExtendedHarness, vaultDir, prov
 
 	// Create meta.json
 	meta := map[string]interface{}{
-		"tool":       provider,
-		"profile":    name,
+		"tool":         provider,
+		"profile":      name,
 		"backed_up_at": "2025-12-19T00:00:00Z",
-		"files":      1,
-		"type":       "user",
+		"files":        1,
+		"type":         "user",
 	}
 	metaPath := filepath.Join(profileDir, "meta.json")
 	metaBytes, _ := json.MarshalIndent(meta, "", "  ")

@@ -126,7 +126,7 @@ func init() {
 	costRatesCmd.Flags().Int("per-session", -1, "cents per session (use with --set)")
 
 	// Tokens flags
-	costTokensCmd.Flags().DurationP("last", "l", 30*24*time.Hour, "time period to analyze (e.g., 7d, 30d, 24h)")
+	costTokensCmd.Flags().StringP("last", "l", "30d", "time period to analyze (e.g., 7d, 30d, 24h)")
 	costTokensCmd.Flags().StringP("format", "f", "table", "output format: table, json, csv")
 }
 
@@ -501,8 +501,14 @@ type TokenModelCost struct {
 }
 
 func runCostTokens(cmd *cobra.Command, args []string) error {
-	period, _ := cmd.Flags().GetDuration("last")
+	lastStr, _ := cmd.Flags().GetString("last")
 	format, _ := cmd.Flags().GetString("format")
+
+	// Parse the duration using the same parser as other commands
+	period, err := parseDuration(lastStr)
+	if err != nil {
+		return fmt.Errorf("invalid --last duration: %w", err)
+	}
 
 	// Parse provider argument
 	var providers []string

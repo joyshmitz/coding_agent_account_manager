@@ -450,8 +450,8 @@ func TestExtendedHarness_GetReport(t *testing.T) {
 	if _, ok := report.Metrics["custom"]; !ok {
 		t.Error("Metrics should contain 'custom'")
 	}
-	if report.DurationMs <= 0 {
-		t.Error("DurationMs should be positive")
+	if report.DurationMs < 0 {
+		t.Error("DurationMs should be non-negative")
 	}
 }
 

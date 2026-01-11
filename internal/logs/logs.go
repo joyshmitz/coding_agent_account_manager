@@ -45,6 +45,17 @@ func (m *MultiScanner) Providers() []string {
 	return providers
 }
 
+// LogDir returns an empty string as MultiScanner aggregates multiple directories.
+func (m *MultiScanner) LogDir() string {
+	return ""
+}
+
+// Scan implements the Scanner interface but returns an error.
+// MultiScanner requires using ScanAll or selecting a specific provider scanner.
+func (m *MultiScanner) Scan(ctx context.Context, logDir string, since time.Time) (*ScanResult, error) {
+	return nil, context.DeadlineExceeded // Return a generic error, or better a specific one
+}
+
 // Scanner returns the scanner for a specific provider, or nil if not registered.
 func (m *MultiScanner) Scanner(provider string) Scanner {
 	return m.scanners[provider]

@@ -65,6 +65,7 @@ type Daemon struct {
 	healthStore *health.Storage
 	logger      *log.Logger
 	logFile     *os.File // Log file handle for cleanup
+	pidFile     *os.File // PID file handle for locking
 
 	// backupScheduler handles automatic backups (may be nil if disabled)
 	backupScheduler *BackupScheduler
@@ -75,9 +76,10 @@ type Daemon struct {
 	// poolMonitor runs the background token monitoring (may be nil if not enabled)
 	poolMonitor *authpool.Monitor
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	configChanged chan struct{} // Signal to reload config in runLoop
+	wg            sync.WaitGroup
 
 	mu      sync.Mutex
 	running bool
@@ -213,9 +215,17 @@ func (d *Daemon) Start() error {
 		d.mu.Unlock()
 		return fmt.Errorf("daemon already running")
 	}
+	
+	// Acquire PID lock first
+	if err := d.acquirePIDLock(); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("acquire pid lock: %w", err)
+	}
+
 	d.running = true
 	d.stats.StartTime = time.Now()
 	d.ctx, d.cancel = context.WithCancel(context.Background())
+	d.configChanged = make(chan struct{}, 1)
 	d.mu.Unlock()
 
 	d.logger.Printf("Starting daemon (check interval: %v, refresh threshold: %v)",
@@ -263,12 +273,9 @@ func (d *Daemon) Start() error {
 
 // ReloadConfig reloads the configuration from disk.
 func (d *Daemon) ReloadConfig() {
-	if !d.config.Verbose { // If previously quiet, maybe new config makes it verbose
-		// We can't update d.config directly if it's used concurrently?
-		// d.config is a pointer. Values might be read concurrently in checkProfile.
-		// We should lock access to config or fields.
-	}
-	
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	// Load global config
 	globalCfg, err := config.LoadSPMConfig()
 	if err != nil {
@@ -282,21 +289,19 @@ func (d *Daemon) ReloadConfig() {
 		return
 	}
 	
-	// Update daemon config fields
-	// Note: We are updating fields on the existing struct pointer which might be racy.
-	// However, for boolean flags (Verbose) it's usually acceptable for logging.
-	// For CheckInterval, it won't affect the running ticker until restart, unless we restart the ticker?
-	// runLoop uses ticker.
-	
-	// For now, let's just log that we reloaded and maybe update Verbose flag.
-	// Updating CheckInterval dynamically is harder without restarting runLoop.
-	
-	// In cmd/daemon.go, we constructed daemon.Config from flags + defaults.
-	// We don't have a clean way to map globalCfg back to daemon.Config here without duplicating logic.
-	// But we can check globalCfg.Runtime settings.
-	
+	// Apply updates
+	d.config.Verbose = globalCfg.Daemon.Verbose
+	d.config.CheckInterval = globalCfg.Daemon.CheckInterval.Duration()
+	d.config.RefreshThreshold = globalCfg.Daemon.RefreshThreshold.Duration()
+
 	d.logger.Println("Config reloaded (runtime settings applied)")
-	// TODO: Apply more settings dynamically if needed
+	
+	// Signal runLoop to update ticker
+	select {
+	case d.configChanged <- struct{}{}:
+	default:
+		// Already signaled
+	}
 }
 
 // Stop gracefully stops the daemon.
@@ -346,6 +351,16 @@ func (d *Daemon) Stop() error {
 		d.logFile.Close()
 		d.logFile = nil
 	}
+
+	// Release PID lock
+	d.mu.Lock()
+	if d.pidFile != nil {
+		health.UnlockFile(d.pidFile)
+		d.pidFile.Close()
+		os.Remove(d.pidFile.Name()) // Clean up file
+		d.pidFile = nil
+	}
+	d.mu.Unlock()
 
 	return nil
 }
@@ -406,13 +421,26 @@ func (d *Daemon) runLoop() {
 	}
 	d.checkAndBackup()
 
-	ticker := time.NewTicker(d.config.CheckInterval)
+	d.mu.Lock()
+	interval := d.config.CheckInterval
+	d.mu.Unlock()
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-d.ctx.Done():
 			return
+		case <-d.configChanged:
+			d.mu.Lock()
+			newInterval := d.config.CheckInterval
+			d.mu.Unlock()
+			if newInterval != interval {
+				interval = newInterval
+				ticker.Reset(interval)
+				d.logger.Printf("Updated check interval to %v", interval)
+			}
 		case <-ticker.C:
 			if !usePoolRefresh {
 				d.checkAndRefresh()
@@ -420,6 +448,68 @@ func (d *Daemon) runLoop() {
 			d.checkAndBackup()
 		}
 	}
+}
+
+// acquirePIDLock securely acquires the PID file lock
+func (d *Daemon) acquirePIDLock() error {
+	path := PIDFilePath()
+	
+	// Create parent directory if needed
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("create pid dir: %w", err)
+	}
+
+	// Open file (CREATE | RDWR)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("open pid file: %w", err)
+	}
+
+	// Try to lock
+	if err := health.LockFile(f); err != nil {
+		f.Close()
+		return fmt.Errorf("lock pid file (is another daemon running?): %w", err)
+	}
+
+	// Check if another process wrote a PID and is still running
+	// Note: We have the lock, so no one else is writing now.
+	// But previous process might have crashed leaving PID.
+	// Or we are the first.
+	
+	// Read existing PID
+	data, err := os.ReadFile(path)
+	if err == nil && len(data) > 0 {
+		var pid int
+		if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
+			if IsProcessRunning(pid) && pid != os.Getpid() {
+				health.UnlockFile(f)
+				f.Close()
+				return fmt.Errorf("daemon already running (pid %d)", pid)
+			}
+		}
+	}
+
+	// Truncate and write our PID
+	if err := f.Truncate(0); err != nil {
+		health.UnlockFile(f)
+		f.Close()
+		return fmt.Errorf("truncate pid file: %w", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		health.UnlockFile(f)
+		f.Close()
+		return fmt.Errorf("seek pid file: %w", err)
+	}
+	
+	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
+		health.UnlockFile(f)
+		f.Close()
+		return fmt.Errorf("write pid file: %w", err)
+	}
+	
+	// Important: Do NOT close f here. We hold the lock as long as f is open.
+	d.pidFile = f
+	return nil
 }
 
 // checkAndBackup creates a backup if one is due.

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -344,7 +345,7 @@ func createTestProfile(t *testing.T, vault *authfile.Vault, provider, profile st
 	t.Helper()
 	dir := vault.ProfilePath(provider, profile)
 	require.NoError(t, makeDir(dir))
-	require.NoError(t, writeFile(dir+"/.claude.json", "{}"))
+	require.NoError(t, writeFile(filepath.Join(dir, ".claude.json"), "{}"))
 }
 
 func makeDir(path string) error {

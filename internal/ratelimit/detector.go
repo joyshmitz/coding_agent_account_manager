@@ -55,6 +55,29 @@ func DefaultPatterns() map[Provider][]string {
 	}
 }
 
+var (
+	defaultCompiledPatterns map[Provider][]*regexp.Regexp
+	initDefaultsOnce        sync.Once
+)
+
+func initDefaults() {
+	defaultCompiledPatterns = make(map[Provider][]*regexp.Regexp)
+	defaults := DefaultPatterns()
+
+	for provider, patterns := range defaults {
+		var compiled []*regexp.Regexp
+		for _, p := range patterns {
+			re, err := regexp.Compile(p)
+			if err != nil {
+				// Should not happen with static default patterns
+				continue
+			}
+			compiled = append(compiled, re)
+		}
+		defaultCompiledPatterns[provider] = compiled
+	}
+}
+
 // Detector monitors output for rate limit patterns.
 type Detector struct {
 	mu       sync.RWMutex
@@ -72,14 +95,21 @@ func NewDetector(provider Provider, customPatterns []string) (*Detector, error) 
 	}
 
 	// Use custom patterns if provided, otherwise use defaults
-	patterns := customPatterns
-	if len(patterns) == 0 {
-		defaults := DefaultPatterns()
-		patterns = defaults[provider]
+	if len(customPatterns) == 0 {
+		initDefaultsOnce.Do(initDefaults)
+		// Use pre-compiled defaults
+		if patterns, ok := defaultCompiledPatterns[provider]; ok {
+			// Copy patterns to avoid sharing backing array, ensuring thread safety if Detector is modified
+			d.patterns = make([]*regexp.Regexp, len(patterns))
+			copy(d.patterns, patterns)
+			return d, nil
+		}
+		// If provider not found in defaults (shouldn't happen for known ones), fallback to empty
+		return d, nil
 	}
 
-	// Compile patterns
-	for _, p := range patterns {
+	// Compile custom patterns
+	for _, p := range customPatterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
 			return nil, err

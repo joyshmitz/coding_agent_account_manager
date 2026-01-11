@@ -1472,7 +1472,6 @@ func (m Model) syncDetailPanel() {
 	m.detailPanel.SetProfile(detail)
 }
 
-
 // View implements tea.Model.
 func (m Model) View() string {
 	if m.width == 0 {
@@ -1556,46 +1555,106 @@ func (m Model) mainView() string {
 	}
 	header := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
 
-	// Calculate panel dimensions
-	providerPanelWidth := 18
-	detailPanelWidth := 35
-	profilesPanelWidth := m.width - providerPanelWidth - detailPanelWidth - 10 // Account for borders and spacing
-	if profilesPanelWidth < 40 {
-		profilesPanelWidth = 40
+	headerHeight := lipgloss.Height(header)
+	contentHeight := m.height - headerHeight - 2
+	if contentHeight < 0 {
+		contentHeight = 0
 	}
-	contentHeight := m.height - 5 // Header + status bar
 
-	// Sync and render provider panel
-	m.providerPanel.SetActiveProvider(m.activeProvider)
-	m.providerPanel.SetSize(providerPanelWidth, contentHeight)
-	providerPanelView := m.providerPanel.View()
+	var panels string
+	if m.isCompactLayout() {
+		tabs := m.renderProviderTabs()
+		tabsHeight := lipgloss.Height(tabs)
+		remainingHeight := contentHeight - tabsHeight - 1
+		if remainingHeight < 0 {
+			remainingHeight = 0
+		}
 
-	// Sync and render profiles panel (center panel)
-	var profilesPanelView string
-	if m.profilesPanel != nil {
-		m.profilesPanel.SetSize(profilesPanelWidth, contentHeight)
-		profilesPanelView = m.profilesPanel.View()
+		profilesHeight := remainingHeight
+		detailHeight := 0
+		showDetail := remainingHeight >= 14
+		if showDetail {
+			profilesHeight = remainingHeight * 6 / 10
+			if profilesHeight < 8 {
+				profilesHeight = 8
+			}
+			detailHeight = remainingHeight - profilesHeight - 1
+			if detailHeight < 7 {
+				detailHeight = 7
+				profilesHeight = remainingHeight - detailHeight - 1
+				if profilesHeight < 6 {
+					profilesHeight = 6
+					if profilesHeight+detailHeight+1 > remainingHeight {
+						detailHeight = remainingHeight - profilesHeight - 1
+						if detailHeight < 0 {
+							detailHeight = 0
+						}
+					}
+				}
+			}
+		}
+
+		var profilesPanelView string
+		if m.profilesPanel != nil {
+			m.profilesPanel.SetSize(m.width, profilesHeight)
+			profilesPanelView = m.profilesPanel.View()
+		} else {
+			profilesPanelView = m.renderProfileList()
+		}
+
+		var detailPanelView string
+		if m.detailPanel != nil && showDetail && detailHeight > 0 {
+			m.syncDetailPanel()
+			m.detailPanel.SetSize(m.width, detailHeight)
+			detailPanelView = m.detailPanel.View()
+		}
+
+		if detailPanelView != "" {
+			panels = lipgloss.JoinVertical(lipgloss.Left, tabs, profilesPanelView, "", detailPanelView)
+		} else {
+			panels = lipgloss.JoinVertical(lipgloss.Left, tabs, profilesPanelView)
+		}
 	} else {
-		profilesPanelView = m.renderProfileList()
-	}
+		// Calculate panel dimensions
+		providerPanelWidth := 20
+		detailPanelWidth := 38
+		profilesPanelWidth := m.width - providerPanelWidth - detailPanelWidth - 10 // Account for borders and spacing
+		if profilesPanelWidth < 40 {
+			profilesPanelWidth = 40
+		}
 
-	// Sync and render detail panel (right panel)
-	var detailPanelView string
-	if m.detailPanel != nil {
-		m.syncDetailPanel()
-		m.detailPanel.SetSize(detailPanelWidth, contentHeight)
-		detailPanelView = m.detailPanel.View()
-	}
+		// Sync and render provider panel
+		m.providerPanel.SetActiveProvider(m.activeProvider)
+		m.providerPanel.SetSize(providerPanelWidth, contentHeight)
+		providerPanelView := m.providerPanel.View()
 
-	// Create panels side by side
-	panels := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		providerPanelView,
-		"  ", // Spacing
-		profilesPanelView,
-		"  ", // Spacing
-		detailPanelView,
-	)
+		// Sync and render profiles panel (center panel)
+		var profilesPanelView string
+		if m.profilesPanel != nil {
+			m.profilesPanel.SetSize(profilesPanelWidth, contentHeight)
+			profilesPanelView = m.profilesPanel.View()
+		} else {
+			profilesPanelView = m.renderProfileList()
+		}
+
+		// Sync and render detail panel (right panel)
+		var detailPanelView string
+		if m.detailPanel != nil {
+			m.syncDetailPanel()
+			m.detailPanel.SetSize(detailPanelWidth, contentHeight)
+			detailPanelView = m.detailPanel.View()
+		}
+
+		// Create panels side by side
+		panels = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			providerPanelView,
+			"  ", // Spacing
+			profilesPanelView,
+			"  ", // Spacing
+			detailPanelView,
+		)
+	}
 
 	// Status bar
 	status := m.renderStatusBar()
@@ -1620,6 +1679,19 @@ func (m Model) mainView() string {
 	}
 
 	return content
+}
+
+func (m Model) isCompactLayout() bool {
+	if m.width <= 0 || m.height <= 0 {
+		return false
+	}
+	if m.width < 100 {
+		return true
+	}
+	if m.height < 28 {
+		return true
+	}
+	return false
 }
 
 func (m Model) projectContextLine() string {
@@ -1659,15 +1731,28 @@ func (m Model) projectDefaultForProvider(provider string) string {
 	return profile
 }
 
+func (m Model) providerCount(provider string) int {
+	if m.profiles == nil {
+		return 0
+	}
+	return len(m.profiles[provider])
+}
+
 // renderProviderTabs renders the provider selection tabs.
 func (m Model) renderProviderTabs() string {
 	var tabs []string
 	for i, p := range m.providers {
+		label := capitalizeFirst(p)
+		if m.width >= 80 {
+			if count := m.providerCount(p); count > 0 {
+				label = fmt.Sprintf("%s %d", label, count)
+			}
+		}
 		style := m.styles.Tab
 		if i == m.activeProvider {
 			style = m.styles.ActiveTab
 		}
-		tabs = append(tabs, style.Render(p))
+		tabs = append(tabs, style.Render(label))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 }
@@ -1700,13 +1785,29 @@ func (m Model) renderProfileList() string {
 
 // renderStatusBar renders the bottom status bar.
 func (m Model) renderStatusBar() string {
-	left := m.styles.StatusKey.Render("q") + m.styles.StatusText.Render(" quit  ")
-	left += m.styles.StatusKey.Render("?") + m.styles.StatusText.Render(" help  ")
-	left += m.styles.StatusKey.Render("tab") + m.styles.StatusText.Render(" switch provider  ")
-	left += m.styles.StatusKey.Render("enter") + m.styles.StatusText.Render(" activate")
+	if m.width <= 0 {
+		return ""
+	}
 
 	if m.statusMsg != "" {
-		left = m.styles.StatusText.Render(m.statusMsg)
+		return m.styles.StatusBar.Width(m.width).Render(m.styles.StatusText.Render(m.statusMsg))
+	}
+
+	left := ""
+	switch {
+	case m.width < 70:
+		left = m.styles.StatusKey.Render("q") + m.styles.StatusText.Render(" quit  ")
+		left += m.styles.StatusKey.Render("?") + m.styles.StatusText.Render(" help")
+	case m.width < 100:
+		left = m.styles.StatusKey.Render("q") + m.styles.StatusText.Render(" quit  ")
+		left += m.styles.StatusKey.Render("?") + m.styles.StatusText.Render(" help  ")
+		left += m.styles.StatusKey.Render("tab") + m.styles.StatusText.Render(" provider  ")
+		left += m.styles.StatusKey.Render("enter") + m.styles.StatusText.Render(" activate")
+	default:
+		left = m.styles.StatusKey.Render("q") + m.styles.StatusText.Render(" quit  ")
+		left += m.styles.StatusKey.Render("?") + m.styles.StatusText.Render(" help  ")
+		left += m.styles.StatusKey.Render("tab") + m.styles.StatusText.Render(" switch provider  ")
+		left += m.styles.StatusKey.Render("enter") + m.styles.StatusText.Render(" activate")
 	}
 
 	return m.styles.StatusBar.Width(m.width).Render(left)

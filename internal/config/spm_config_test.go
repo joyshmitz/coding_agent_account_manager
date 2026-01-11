@@ -862,8 +862,18 @@ func TestNewConfigSectionDefaults(t *testing.T) {
 
 	// Test subscriptions defaults
 	t.Run("Subscriptions", func(t *testing.T) {
-		if cfg.Subscriptions != nil {
-			t.Error("Subscriptions should be nil by default")
+		if cfg.Subscriptions == nil {
+			t.Fatal("Subscriptions should not be nil by default")
+		}
+		sub, ok := cfg.Subscriptions["gemini"]
+		if !ok {
+			t.Fatal("Subscriptions should include gemini by default")
+		}
+		if sub.Plan != "ultra" {
+			t.Errorf("Subscriptions[gemini].Plan = %q, want ultra", sub.Plan)
+		}
+		if sub.MonthlyCost != 275 {
+			t.Errorf("Subscriptions[gemini].MonthlyCost = %v, want 275", sub.MonthlyCost)
 		}
 	})
 }
@@ -1011,10 +1021,13 @@ func TestNewConfigSectionLoadAndSave(t *testing.T) {
 	if loaded.Daemon.AuthPool.MaxConcurrentRefresh != 5 {
 		t.Errorf("Loaded Daemon.AuthPool.MaxConcurrentRefresh = %d, want 5", loaded.Daemon.AuthPool.MaxConcurrentRefresh)
 	}
-	if len(loaded.Subscriptions) != 2 {
-		t.Errorf("Loaded Subscriptions has %d entries, want 2", len(loaded.Subscriptions))
+	if len(loaded.Subscriptions) != 3 {
+		t.Errorf("Loaded Subscriptions has %d entries, want 3", len(loaded.Subscriptions))
 	}
 	if sub, ok := loaded.Subscriptions["claude"]; !ok || sub.MonthlyCost != 200 {
 		t.Errorf("Loaded Subscriptions[claude] = %+v, want monthly_cost 200", sub)
+	}
+	if sub, ok := loaded.Subscriptions["gemini"]; !ok || sub.MonthlyCost != 275 {
+		t.Errorf("Loaded Subscriptions[gemini] = %+v, want monthly_cost 275", sub)
 	}
 }

@@ -33,6 +33,7 @@ func NewClaudeFetcher() *ClaudeFetcher {
 type claudeUsageResponse struct {
 	FiveHour *claudeWindow `json:"five_hour"`
 	SevenDay *claudeWindow `json:"seven_day"`
+	Opus     *claudeWindow `json:"opus"`
 }
 
 type claudeWindow struct {
@@ -120,6 +121,19 @@ func (f *ClaudeFetcher) Fetch(ctx context.Context, accessToken string) (*UsageIn
 			UsedPercent:    int(util * 100),
 			ResetsAt:       parseISO8601(usage.SevenDay.ResetsAt),
 			WindowDuration: 7 * 24 * time.Hour,
+		}
+	}
+
+	if usage.Opus != nil {
+		util := usage.Opus.Utilization
+		if util > 1 {
+			util = util / 100.0
+		}
+		info.TertiaryWindow = &UsageWindow{
+			Utilization: util,
+			UsedPercent: int(util * 100),
+			ResetsAt:    parseISO8601(usage.Opus.ResetsAt),
+			// Opus limits are typically daily/weekly but window duration is variable
 		}
 	}
 

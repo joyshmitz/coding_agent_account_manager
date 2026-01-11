@@ -482,6 +482,8 @@ func selectProfileWithRotation(tool string, profiles []string, currentProfile st
 		return nil, fmt.Errorf("no profiles found for %s; create one with 'caam backup %s <name>'", tool, tool)
 	}
 
+	primePlanTypes(tool, profiles)
+
 	algorithm := rotation.AlgorithmSmart
 	if spmCfg != nil {
 		if a := strings.TrimSpace(spmCfg.Stealth.Rotation.Algorithm); a != "" {

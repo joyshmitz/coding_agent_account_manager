@@ -14,6 +14,8 @@ func TestNormalizeModelName(t *testing.T) {
 	}{
 		{in: " CLAUDE-3-5-SONNET ", want: "claude-3.5-sonnet"},
 		{in: "claude-3-opus-20240229", want: "claude-3-opus"},
+		{in: "claude-3-5-sonnet-20241022", want: "claude-3.5-sonnet"},
+		{in: "gpt-4o-2024-05-13", want: "gpt-4o"},
 		{in: "gpt4o-mini", want: "gpt-4o-mini"},
 		{in: "gemini_pro", want: "gemini-pro"},
 	}
@@ -44,6 +46,31 @@ func TestPriceForAliases(t *testing.T) {
 	}
 }
 
+func TestPricingTablesComplete(t *testing.T) {
+	expected := map[string][]string{
+		"claude": {"claude-3-opus", "claude-3.5-sonnet", "claude-3-haiku"},
+		"codex":  {"gpt-4o", "gpt-4o-mini"},
+		"gemini": {"gemini-pro", "gemini-ultra"},
+	}
+
+	for provider, models := range expected {
+		for _, model := range models {
+			price, ok := PriceFor(provider, model)
+			if !ok {
+				t.Fatalf("missing price for %s/%s", provider, model)
+			}
+			if provider != "gemini" {
+				if price.InputPer1M <= 0 {
+					t.Fatalf("input price for %s/%s should be > 0", provider, model)
+				}
+				if price.OutputPer1M <= 0 {
+					t.Fatalf("output price for %s/%s should be > 0", provider, model)
+				}
+			}
+		}
+	}
+}
+
 func TestCalculateCostSingleModel(t *testing.T) {
 	usage := &logs.TokenUsage{
 		InputTokens:       1_000_000,
@@ -71,6 +98,39 @@ func TestCalculateCostAllModels(t *testing.T) {
 	want := 26.35
 	if !floatApproxEqual(got, want, 1e-6) {
 		t.Fatalf("CalculateCost(all models) = %f, want %f", got, want)
+	}
+}
+
+func TestCalculateCostUnknownModel(t *testing.T) {
+	usage := &logs.TokenUsage{
+		InputTokens: 1_000_000,
+	}
+	got := CalculateCost(usage, "unknown-model", "claude")
+	if got != 0 {
+		t.Fatalf("CalculateCost(unknown model) = %f, want 0", got)
+	}
+}
+
+func TestCalculateCostModelNotInUsage(t *testing.T) {
+	usage := &logs.TokenUsage{
+		ByModel: map[string]*logs.ModelTokenUsage{
+			"gpt-4o": {Model: "gpt-4o", InputTokens: 1_000_000, OutputTokens: 1_000_000},
+		},
+	}
+	got := CalculateCost(usage, "gpt-4o-mini", "codex")
+	if got != 0 {
+		t.Fatalf("CalculateCost(model not in usage) = %f, want 0", got)
+	}
+}
+
+func TestCalculateCostNegativeTokens(t *testing.T) {
+	usage := &logs.TokenUsage{
+		InputTokens:  -100,
+		OutputTokens: -50,
+	}
+	got := CalculateCost(usage, "gpt-4o", "codex")
+	if got != 0 {
+		t.Fatalf("CalculateCost(negative tokens) = %f, want 0", got)
 	}
 }
 

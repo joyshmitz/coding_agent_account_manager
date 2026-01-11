@@ -127,12 +127,6 @@ func runDaemonForeground(interval, threshold time.Duration, verbose, usePool boo
 
 	d := daemon.New(v, hs, cfg)
 
-	// Write PID file
-	if err := daemon.WritePIDFile(); err != nil {
-		fmt.Printf("Warning: could not write PID file: %v\n", err)
-	}
-	defer daemon.RemovePIDFile()
-
 	return d.Start()
 }
 

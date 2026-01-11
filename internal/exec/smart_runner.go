@@ -184,7 +184,7 @@ func (r *SmartRunner) Run(ctx context.Context, opts RunOptions) error {
 		return fmt.Errorf("command failed: %w", waitErr)
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("command exited with code %d", exitCode)
+		return &ExitCodeError{Code: exitCode}
 	}
 
 	return nil

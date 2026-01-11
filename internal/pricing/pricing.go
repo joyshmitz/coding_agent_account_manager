@@ -87,7 +87,11 @@ func CalculateCost(usage *logs.TokenUsage, model, provider string) float64 {
 		return 0
 	}
 
-	if mu := findModelUsage(usage, provider, model); mu != nil {
+	if len(usage.ByModel) > 0 {
+		mu := findModelUsage(usage, provider, model)
+		if mu == nil {
+			return 0
+		}
 		cacheRead := int64(0)
 		cacheCreate := int64(0)
 		if len(usage.ByModel) == 1 {
@@ -135,10 +139,22 @@ func calculateCostAllModels(usage *logs.TokenUsage, provider string) float64 {
 }
 
 func costFromTokens(input, output, cacheRead, cacheCreate int64, price TokenPrice) float64 {
+	input = nonNegativeTokens(input)
+	output = nonNegativeTokens(output)
+	cacheRead = nonNegativeTokens(cacheRead)
+	cacheCreate = nonNegativeTokens(cacheCreate)
+
 	return (float64(input)/tokensPerMillion)*price.InputPer1M +
 		(float64(output)/tokensPerMillion)*price.OutputPer1M +
 		(float64(cacheRead)/tokensPerMillion)*price.CacheReadPer1M +
 		(float64(cacheCreate)/tokensPerMillion)*price.CacheCreatePer1M
+}
+
+func nonNegativeTokens(tokens int64) int64 {
+	if tokens < 0 {
+		return 0
+	}
+	return tokens
 }
 
 func findModelUsage(usage *logs.TokenUsage, provider, model string) *logs.ModelTokenUsage {

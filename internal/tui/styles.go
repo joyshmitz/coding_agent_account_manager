@@ -4,19 +4,19 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Color palette - Dracula theme inspired.
+// Color palette - modern dark theme.
 var (
-	colorPurple    = lipgloss.Color("#bd93f9")
-	colorPink      = lipgloss.Color("#ff79c6")
-	colorGreen     = lipgloss.Color("#50fa7b")
-	colorYellow    = lipgloss.Color("#f1fa8c")
-	colorCyan      = lipgloss.Color("#8be9fd")
-	colorOrange    = lipgloss.Color("#ffb86c")
-	colorRed       = lipgloss.Color("#ff5555")
-	colorWhite     = lipgloss.Color("#f8f8f2")
-	colorGray      = lipgloss.Color("#6272a4")
-	colorDarkGray  = lipgloss.Color("#44475a")
-	colorBackground = lipgloss.Color("#282a36")
+	colorPurple     = lipgloss.Color("#4f8cff")
+	colorPink       = lipgloss.Color("#f472b6")
+	colorGreen      = lipgloss.Color("#2fd576")
+	colorYellow     = lipgloss.Color("#f2c94c")
+	colorCyan       = lipgloss.Color("#5ad1e9")
+	colorOrange     = lipgloss.Color("#f5a15f")
+	colorRed        = lipgloss.Color("#ff6b6b")
+	colorWhite      = lipgloss.Color("#e6edf3")
+	colorGray       = lipgloss.Color("#9aa4b2")
+	colorDarkGray   = lipgloss.Color("#1f2937")
+	colorBackground = lipgloss.Color("#0b1220")
 )
 
 // Styles holds all the lipgloss styles for the TUI.
@@ -60,16 +60,24 @@ func DefaultStyles() Styles {
 			MarginBottom(1),
 
 		Tab: lipgloss.NewStyle().
-			Padding(0, 2).
+			Padding(0, 1).
 			Foreground(colorGray).
-			Border(lipgloss.RoundedBorder()).
+			Border(lipgloss.NormalBorder()).
+			BorderBottom(true).
+			BorderTop(false).
+			BorderLeft(false).
+			BorderRight(false).
 			BorderForeground(colorDarkGray),
 
 		ActiveTab: lipgloss.NewStyle().
-			Padding(0, 2).
+			Padding(0, 1).
 			Foreground(colorWhite).
 			Bold(true).
-			Border(lipgloss.RoundedBorder()).
+			Border(lipgloss.NormalBorder()).
+			BorderBottom(true).
+			BorderTop(false).
+			BorderLeft(false).
+			BorderRight(false).
 			BorderForeground(colorPurple),
 
 		Item: lipgloss.NewStyle().
@@ -78,7 +86,7 @@ func DefaultStyles() Styles {
 
 		SelectedItem: lipgloss.NewStyle().
 			Padding(0, 2).
-			Foreground(colorPurple).
+			Foreground(colorWhite).
 			Bold(true).
 			Background(colorDarkGray),
 

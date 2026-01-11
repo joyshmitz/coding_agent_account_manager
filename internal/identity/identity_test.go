@@ -133,6 +133,42 @@ func TestExtractFromCodexAuth_NestedToken(t *testing.T) {
 	}
 }
 
+func TestExtractFromCodexAuth_PrefersNestedIDToken(t *testing.T) {
+	nested := buildJWT(t, map[string]interface{}{"email": "nested@example.com"})
+	path := writeAuthFile(t, map[string]interface{}{
+		"access_token": "not-a-jwt",
+		"tokens": map[string]interface{}{
+			"id_token": nested,
+		},
+	})
+
+	identity, err := ExtractFromCodexAuth(path)
+	if err != nil {
+		t.Fatalf("ExtractFromCodexAuth error: %v", err)
+	}
+	if identity.Email != "nested@example.com" {
+		t.Errorf("Email = %q, want %q", identity.Email, "nested@example.com")
+	}
+}
+
+func TestExtractFromCodexAuth_FallsBackToNestedAccessToken(t *testing.T) {
+	nested := buildJWT(t, map[string]interface{}{"email": "fallback@example.com"})
+	path := writeAuthFile(t, map[string]interface{}{
+		"access_token": "not-a-jwt",
+		"tokens": map[string]interface{}{
+			"access_token": nested,
+		},
+	})
+
+	identity, err := ExtractFromCodexAuth(path)
+	if err != nil {
+		t.Fatalf("ExtractFromCodexAuth error: %v", err)
+	}
+	if identity.Email != "fallback@example.com" {
+		t.Errorf("Email = %q, want %q", identity.Email, "fallback@example.com")
+	}
+}
+
 func TestExtractFromCodexAuth_MissingToken(t *testing.T) {
 	path := writeAuthFile(t, map[string]interface{}{
 		"access_token": "not-a-jwt",

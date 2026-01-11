@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/identity"
 )
 
 // Profile represents a single account profile for an AI coding tool.
@@ -63,6 +65,9 @@ type Profile struct {
 	// Metadata stores provider-specific configuration.
 	Metadata map[string]string `json:"metadata,omitempty"`
 
+	// Identity contains extracted account details (email, plan type).
+	Identity *identity.Identity `json:"identity,omitempty"`
+
 	// BrowserCommand is the browser executable to use for OAuth flows.
 	// Examples: "google-chrome", "firefox", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 	// If empty, uses system default browser.
@@ -106,6 +111,55 @@ func (p *Profile) LockPath() string {
 // MetaPath returns the path to the profile metadata file.
 func (p *Profile) MetaPath() string {
 	return filepath.Join(p.BasePath, "profile.json")
+}
+
+// LoadIdentity loads identity information from this profile's auth files.
+// Errors are ignored to keep identity extraction best-effort.
+func (p *Profile) LoadIdentity() {
+	if p == nil || p.Identity != nil {
+		return
+	}
+
+	var id *identity.Identity
+	switch strings.ToLower(p.Provider) {
+	case "codex":
+		id = loadIdentityFromPaths([]string{
+			filepath.Join(p.CodexHomePath(), "auth.json"),
+		}, identity.ExtractFromCodexAuth)
+	case "claude":
+		id = loadIdentityFromPaths([]string{
+			filepath.Join(p.HomePath(), ".claude", ".credentials.json"),
+		}, identity.ExtractFromClaudeCredentials)
+	case "gemini":
+		candidates := []string{
+			filepath.Join(p.HomePath(), ".gemini", "settings.json"),
+			filepath.Join(p.HomePath(), ".gemini", "oauth_credentials.json"),
+		}
+		if strings.EqualFold(p.AuthMode, "vertex-adc") {
+			candidates = append(candidates, filepath.Join(p.BasePath, "gcloud", "application_default_credentials.json"))
+		}
+		id = loadIdentityFromPaths(candidates, identity.ExtractFromGeminiConfig)
+	}
+
+	if id != nil {
+		p.Identity = id
+	}
+}
+
+func loadIdentityFromPaths(paths []string, extractor func(string) (*identity.Identity, error)) *identity.Identity {
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		id, err := extractor(path)
+		if err != nil {
+			continue
+		}
+		if id != nil {
+			return id
+		}
+	}
+	return nil
 }
 
 // HasBrowserConfig returns true if browser configuration is set.
@@ -299,19 +353,19 @@ func (p *Profile) Save() error {
 	if err != nil {
 		return fmt.Errorf("create temp profile file: %w", err)
 	}
-	
+
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("write temp profile file: %w", err)
 	}
-	
+
 	if err := f.Sync(); err != nil {
 		f.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("sync temp profile file: %w", err)
 	}
-	
+
 	if err := f.Close(); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("close temp profile file: %w", err)
@@ -460,6 +514,7 @@ func (s *Store) Load(provider, name string) (*Profile, error) {
 		profile.BasePath = profilePath
 	}
 
+	profile.LoadIdentity()
 	return &profile, nil
 }
 
@@ -614,13 +669,13 @@ func (s *Store) Clone(provider, sourceName, targetName string, opts CloneOptions
 
 	// Create new profile with cloned settings
 	target := &Profile{
-		Name:              targetName,
-		Provider:          provider,
-		AuthMode:          source.AuthMode,
-		BasePath:          targetPath,
-		CreatedAt:         time.Now(),
-		BrowserCommand:    source.BrowserCommand,
-		BrowserProfileDir: source.BrowserProfileDir,
+		Name:               targetName,
+		Provider:           provider,
+		AuthMode:           source.AuthMode,
+		BasePath:           targetPath,
+		CreatedAt:          time.Now(),
+		BrowserCommand:     source.BrowserCommand,
+		BrowserProfileDir:  source.BrowserProfileDir,
 		BrowserProfileName: source.BrowserProfileName,
 	}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/logs"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/usage"
 )
 
@@ -22,7 +23,8 @@ var limitsCmd = &cobra.Command{
 	Long: `Fetch real-time rate limit and usage data from provider APIs.
 
 This command queries the provider's API to get current rate limit utilization,
-which is useful for deciding when to switch accounts.
+which is useful for deciding when to switch accounts. It also parses local logs
+to estimate token burn rate and predict when limits will be hit.
 
 Examples:
   caam limits                     # Show limits for all providers
@@ -56,15 +58,22 @@ func runLimits(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		providers = []string{strings.ToLower(args[0])}
 	} else {
-		providers = []string{"claude", "codex"}
+		providers = []string{"claude", "codex", "gemini"}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	vaultDir := getVaultDir()
-	fetcher := usage.NewMultiProfileFetcher()
 	out := cmd.OutOrStdout()
+
+	// Initialize log scanners for burn rate calculation
+	scanner := logs.NewMultiScanner()
+	scanner.Register("claude", logs.NewClaudeScanner())
+	scanner.Register("codex", logs.NewCodexScanner())
+	scanner.Register("gemini", logs.NewGeminiScanner())
+
+	fetcher := usage.NewMultiProfileFetcher(usage.WithLogScanner(scanner))
 
 	allResults := make([]usage.ProfileUsage, 0)
 
@@ -162,10 +171,10 @@ func renderLimits(w io.Writer, format string, results []usage.ProfileUsage) erro
 		}
 
 		fmt.Fprintln(w, "Rate Limit Usage")
-		fmt.Fprintln(w, "────────────────────────────────────────────────────────────────")
+		fmt.Fprintln(w, "──────────────────────────────────────────────────────────────────────────────────────────")
 
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "PROFILE\tSCORE\tPRIMARY\tSECONDARY\tRESETS IN\tSTATUS")
+		fmt.Fprintln(tw, "PROFILE\tSCORE\tPRIMARY\tSECONDARY\tRESETS IN\tBURN/HR\tDEPLETES\tSTATUS")
 
 		for _, r := range results {
 			profileName := fmt.Sprintf("%s/%s", r.Provider, r.ProfileName)
@@ -174,6 +183,8 @@ func renderLimits(w io.Writer, format string, results []usage.ProfileUsage) erro
 			secondary := "-"
 			resetsIn := "-"
 			status := "unknown"
+			burnRate := "-"
+			depletesIn := "-"
 
 			if r.Usage != nil {
 				score = r.Usage.AvailabilityScore()
@@ -195,10 +206,22 @@ func renderLimits(w io.Writer, format string, results []usage.ProfileUsage) erro
 				if ttl := r.Usage.TimeUntilReset(); ttl > 0 {
 					resetsIn = formatLimitsDuration(ttl)
 				}
+
+				if r.Usage.BurnRate != nil && r.Usage.BurnRate.TokensPerHour > 0 {
+					burnRate = formatBurnRate(r.Usage.BurnRate.TokensPerHour)
+				}
+
+				if ttl := r.Usage.TimeToDepletion(); ttl > 0 {
+					depletesIn = formatLimitsDuration(ttl)
+					// Add warning indicator for imminent depletion
+					if ttl < 30*time.Minute {
+						depletesIn += " ⚠️"
+					}
+				}
 			}
 
-			fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\n",
-				profileName, score, primary, secondary, resetsIn, status)
+			fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				profileName, score, primary, secondary, resetsIn, burnRate, depletesIn, status)
 		}
 
 		tw.Flush()
@@ -207,6 +230,16 @@ func renderLimits(w io.Writer, format string, results []usage.ProfileUsage) erro
 	default:
 		return fmt.Errorf("unsupported format: %s", format)
 	}
+}
+
+// formatBurnRate formats tokens per hour in a compact way.
+func formatBurnRate(tokensPerHour float64) string {
+	if tokensPerHour >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", tokensPerHour/1_000_000)
+	} else if tokensPerHour >= 1_000 {
+		return fmt.Sprintf("%.1fK", tokensPerHour/1_000)
+	}
+	return fmt.Sprintf("%.0f", tokensPerHour)
 }
 
 func renderBestProfile(w io.Writer, format string, results []usage.ProfileUsage, threshold float64) error {
