@@ -34,16 +34,19 @@ func ShouldRefresh(h *health.ProfileHealth, threshold time.Duration) bool {
 // RefreshProfile orchestrates the refresh for a specific provider/profile.
 func RefreshProfile(ctx context.Context, provider, profile string, vault *authfile.Vault, store *health.Storage) error {
 	// Check if this profile is currently active before we modify the vault
-	// (which would change the hash and break ActiveProfile detection)
+	// (which would change the hash and break ActiveProfile detection).
+	//
+	// IMPORTANT: Capture a snapshot first, then verify it matches the target profile.
+	// This avoids a race where the active profile changes between ActiveProfile()
+	// and the snapshot read, which could otherwise overwrite a newly-activated profile.
 	isActive := false
 	var preRefreshState map[string][]byte
 
 	fileSet, ok := authfile.GetAuthFileSet(provider)
 	if ok {
-		if active, err := vault.ActiveProfile(fileSet); err == nil && active == profile {
+		preRefreshState, _ = readAuthFiles(fileSet)
+		if len(preRefreshState) > 0 && snapshotMatchesProfile(fileSet, vault, profile, preRefreshState) {
 			isActive = true
-			// Capture the state of live files to verify they don't change during refresh
-			preRefreshState, _ = readAuthFiles(fileSet)
 		}
 	}
 
@@ -266,5 +269,28 @@ func filesEqual(a, b map[string][]byte) bool {
 			return false
 		}
 	}
+	return true
+}
+
+func snapshotMatchesProfile(fileSet authfile.AuthFileSet, vault *authfile.Vault, profile string, snapshot map[string][]byte) bool {
+	if vault == nil || len(snapshot) == 0 {
+		return false
+	}
+
+	for _, spec := range fileSet.Files {
+		data, ok := snapshot[spec.Path]
+		if !ok {
+			continue
+		}
+		backupPath := vault.BackupPath(fileSet.Tool, profile, filepath.Base(spec.Path))
+		backupData, err := os.ReadFile(backupPath)
+		if err != nil {
+			return false
+		}
+		if !bytes.Equal(data, backupData) {
+			return false
+		}
+	}
+
 	return true
 }

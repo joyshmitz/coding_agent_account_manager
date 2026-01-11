@@ -112,7 +112,7 @@ func TestRunCommand_Extended(t *testing.T) {
 	profilesDir := filepath.Join(rootDir, "caam", "profiles")
 	require.NoError(t, os.MkdirAll(profilesDir, 0755))
 	profileStore = profile.NewStore(profilesDir)
-	
+
 	// Setup registry
 	registry = provider.NewRegistry()
 	registry.Register(claude.New())

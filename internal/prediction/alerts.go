@@ -99,7 +99,7 @@ func GenerateAlerts(predictions []*Prediction, opts AlertOptions) []*Alert {
 				Type:            *alertType,
 				Provider:        pred.Provider,
 				Profile:         pred.Profile,
-				Message:         buildMessage(pred, opts),
+				Message:         buildMessage(pred),
 				SuggestedAction: buildAction(pred),
 				TimeUntil:       timeUntil,
 				Urgency:         urgency,
@@ -200,7 +200,7 @@ func shouldRecommendSwitch(pred *Prediction, opts AlertOptions) bool {
 	return pred.TimeToDepletion < opts.RotationThreshold
 }
 
-func buildMessage(pred *Prediction, opts AlertOptions) string {
+func buildMessage(pred *Prediction) string {
 	if pred == nil {
 		return "Rate limit status unknown"
 	}

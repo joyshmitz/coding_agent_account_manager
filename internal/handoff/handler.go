@@ -73,6 +73,13 @@ func (r *Registry) Get(provider string) LoginHandler {
 	return r.handlers[provider]
 }
 
+// Clear removes a handler from the registry. Useful for testing.
+func (r *Registry) Clear(provider string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.handlers, provider)
+}
+
 // Providers returns a list of registered provider IDs.
 func (r *Registry) Providers() []string {
 	r.mu.RLock()

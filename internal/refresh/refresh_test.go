@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/health"
 )
 
@@ -476,6 +477,76 @@ func TestGetRefreshToken_TopLevelPreferred(t *testing.T) {
 	}
 	if token != "top-level-token" {
 		t.Errorf("token = %q, want %q (top level should be preferred)", token, "top-level-token")
+	}
+}
+
+// =============================================================================
+// snapshotMatchesProfile Tests
+// =============================================================================
+
+func TestSnapshotMatchesProfile(t *testing.T) {
+	tmpDir := t.TempDir()
+	vault := authfile.NewVault(filepath.Join(tmpDir, "vault"))
+	livePath := filepath.Join(tmpDir, "live", "auth.json")
+
+	if err := os.MkdirAll(filepath.Dir(livePath), 0700); err != nil {
+		t.Fatalf("failed to create live dir: %v", err)
+	}
+
+	snapshot := map[string][]byte{
+		livePath: []byte(`{"access_token":"live"}`),
+	}
+
+	fileSet := authfile.AuthFileSet{
+		Tool: "codex",
+		Files: []authfile.AuthFileSpec{
+			{Tool: "codex", Path: livePath},
+		},
+	}
+
+	backupPath := vault.BackupPath("codex", "work", filepath.Base(livePath))
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0700); err != nil {
+		t.Fatalf("failed to create backup dir: %v", err)
+	}
+	if err := os.WriteFile(backupPath, snapshot[livePath], 0600); err != nil {
+		t.Fatalf("failed to write backup file: %v", err)
+	}
+
+	if !snapshotMatchesProfile(fileSet, vault, "work", snapshot) {
+		t.Errorf("snapshotMatchesProfile() = false, want true")
+	}
+}
+
+func TestSnapshotMatchesProfile_Mismatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	vault := authfile.NewVault(filepath.Join(tmpDir, "vault"))
+	livePath := filepath.Join(tmpDir, "live", "auth.json")
+
+	if err := os.MkdirAll(filepath.Dir(livePath), 0700); err != nil {
+		t.Fatalf("failed to create live dir: %v", err)
+	}
+
+	snapshot := map[string][]byte{
+		livePath: []byte(`{"access_token":"live"}`),
+	}
+
+	fileSet := authfile.AuthFileSet{
+		Tool: "codex",
+		Files: []authfile.AuthFileSpec{
+			{Tool: "codex", Path: livePath},
+		},
+	}
+
+	backupPath := vault.BackupPath("codex", "work", filepath.Base(livePath))
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0700); err != nil {
+		t.Fatalf("failed to create backup dir: %v", err)
+	}
+	if err := os.WriteFile(backupPath, []byte(`{"access_token":"different"}`), 0600); err != nil {
+		t.Fatalf("failed to write backup file: %v", err)
+	}
+
+	if snapshotMatchesProfile(fileSet, vault, "work", snapshot) {
+		t.Errorf("snapshotMatchesProfile() = true, want false")
 	}
 }
 
