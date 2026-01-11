@@ -439,3 +439,250 @@ func TestConfigFromGlobal(t *testing.T) {
 		t.Errorf("CooldownDuration = %v, want 30m", cfg.CooldownDuration)
 	}
 }
+
+// Test Run with context cancellation
+func TestWrapper_Run_ContextCancelled(t *testing.T) {
+	tmpDir := t.TempDir()
+	vault := authfile.NewVault(tmpDir)
+
+	// Create a profile
+	profileDir := filepath.Join(tmpDir, "claude", "test@example.com")
+	if err := os.MkdirAll(profileDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, ".claude.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Provider = "claude"
+	cfg.NotifyOnSwitch = false
+
+	stderr := &bytes.Buffer{}
+	cfg.Stderr = stderr
+
+	w := NewWrapper(vault, nil, nil, cfg)
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	result := w.Run(ctx)
+
+	// With cancelled context, we should still get a result
+	if result == nil {
+		t.Fatal("Result is nil")
+	}
+}
+
+// Test recordSession with nil DB
+func TestWrapper_RecordSession_NilDB(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Provider = "claude"
+
+	w := NewWrapper(nil, nil, nil, cfg)
+
+	result := &Result{
+		StartTime:    time.Now(),
+		Duration:     5 * time.Second,
+		ProfilesUsed: []string{"test"},
+		ExitCode:     0,
+	}
+
+	// Should not panic with nil DB
+	w.recordSession(result)
+}
+
+// Test recordSession with empty ProfilesUsed
+func TestWrapper_RecordSession_EmptyProfiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := caamdb.OpenAt(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	cfg := DefaultConfig()
+	cfg.Provider = "claude"
+
+	w := NewWrapper(nil, db, nil, cfg)
+
+	result := &Result{
+		StartTime:    time.Now(),
+		Duration:     5 * time.Second,
+		ProfilesUsed: []string{}, // Empty
+		ExitCode:     0,
+	}
+
+	// Should not panic with empty profiles
+	w.recordSession(result)
+}
+
+// Test recordSession with retry count
+func TestWrapper_RecordSession_WithRetries(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := caamdb.OpenAt(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	cfg := DefaultConfig()
+	cfg.Provider = "claude"
+
+	stderr := &bytes.Buffer{}
+	cfg.Stderr = stderr
+
+	w := NewWrapper(nil, db, nil, cfg)
+
+	result := &Result{
+		StartTime:    time.Now(),
+		Duration:     10 * time.Second,
+		ProfilesUsed: []string{"test@example.com"},
+		ExitCode:     0,
+		RetryCount:   2,
+		RateLimitHit: true,
+	}
+
+	// Should record session with retry info
+	w.recordSession(result)
+}
+
+// Test runOnce with unknown provider
+func TestWrapper_RunOnce_UnknownProvider(t *testing.T) {
+	tmpDir := t.TempDir()
+	vault := authfile.NewVault(tmpDir)
+
+	cfg := DefaultConfig()
+	cfg.Provider = "unknown_provider"
+	cfg.NotifyOnSwitch = false
+
+	w := NewWrapper(vault, nil, nil, cfg)
+
+	exitCode, rateLimitHit, err := w.runOnce(context.Background(), "test")
+
+	if err == nil {
+		t.Error("Expected error for unknown provider")
+	}
+	if exitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", exitCode)
+	}
+	if rateLimitHit {
+		t.Error("rateLimitHit should be false for unknown provider")
+	}
+}
+
+// Test teeWriter Flush with empty buffer
+func TestTeeWriter_Flush_EmptyBuffer(t *testing.T) {
+	detector, err := ratelimit.NewDetector(ratelimit.ProviderClaude, nil)
+	if err != nil {
+		t.Fatalf("create detector: %v", err)
+	}
+
+	dest := &bytes.Buffer{}
+	tw := &teeWriter{
+		dest:     dest,
+		detector: detector,
+		buffer:   nil, // Empty buffer
+	}
+
+	// Flush with empty buffer should not panic
+	tw.Flush()
+
+	if detector.Detected() {
+		t.Error("Detector should not detect anything in empty buffer")
+	}
+}
+
+// Test teeWriter with multiple complete lines
+func TestTeeWriter_MultipleLines(t *testing.T) {
+	detector, err := ratelimit.NewDetector(ratelimit.ProviderClaude, nil)
+	if err != nil {
+		t.Fatalf("create detector: %v", err)
+	}
+
+	dest := &bytes.Buffer{}
+	tw := &teeWriter{
+		dest:     dest,
+		detector: detector,
+	}
+
+	// Write multiple lines at once
+	tw.Write([]byte("line1\nline2\nline3\n"))
+
+	// Verify output
+	if dest.String() != "line1\nline2\nline3\n" {
+		t.Errorf("Output = %q, want 'line1\\nline2\\nline3\\n'", dest.String())
+	}
+
+	// No rate limit detected
+	if detector.Detected() {
+		t.Error("Detector should not detect rate limit in normal lines")
+	}
+}
+
+// Test Run with Vault that returns error (not writable vault dir)
+func TestWrapper_Run_VaultListError(t *testing.T) {
+	// Create a vault pointing to a file (not a directory) to force list error
+	tmpDir := t.TempDir()
+	vaultPath := filepath.Join(tmpDir, "vault")
+	if err := os.WriteFile(vaultPath, []byte("not a directory"), 0600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	vault := authfile.NewVault(vaultPath)
+
+	cfg := DefaultConfig()
+	cfg.Provider = "claude"
+	cfg.NotifyOnSwitch = false
+
+	stderr := &bytes.Buffer{}
+	cfg.Stderr = stderr
+
+	w := NewWrapper(vault, nil, nil, cfg)
+
+	result := w.Run(context.Background())
+
+	if result.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", result.ExitCode)
+	}
+	if result.Err == nil {
+		t.Error("Expected error from vault list")
+	}
+}
+
+// Test DefaultConfig initialization details
+func TestDefaultConfig_AllFields(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.InitialDelay != 30*time.Second {
+		t.Errorf("InitialDelay = %v, want 30s", cfg.InitialDelay)
+	}
+	if cfg.MaxDelay != 5*time.Minute {
+		t.Errorf("MaxDelay = %v, want 5m", cfg.MaxDelay)
+	}
+	if cfg.BackoffMultiplier != 2.0 {
+		t.Errorf("BackoffMultiplier = %v, want 2.0", cfg.BackoffMultiplier)
+	}
+	if !cfg.Jitter {
+		t.Error("Jitter = false, want true")
+	}
+}
+
+// Test NextDelay with negative multiplier
+func TestNextDelay_NegativeMultiplier(t *testing.T) {
+	cfg := Config{
+		InitialDelay:      10 * time.Second,
+		MaxDelay:          5 * time.Minute,
+		BackoffMultiplier: -1.0, // Negative, should default to 2.0
+		Jitter:            false,
+	}
+
+	d := cfg.NextDelay(1)
+	// With default multiplier of 2.0: 10s * 2^1 = 20s
+	if d != 20*time.Second {
+		t.Errorf("NextDelay(1) with negative multiplier = %v, want 20s", d)
+	}
+}
