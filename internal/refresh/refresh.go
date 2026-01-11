@@ -1,6 +1,7 @@
 package refresh
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,10 +36,14 @@ func RefreshProfile(ctx context.Context, provider, profile string, vault *authfi
 	// Check if this profile is currently active before we modify the vault
 	// (which would change the hash and break ActiveProfile detection)
 	isActive := false
+	var preRefreshState map[string][]byte
+
 	fileSet, ok := authfile.GetAuthFileSet(provider)
 	if ok {
 		if active, err := vault.ActiveProfile(fileSet); err == nil && active == profile {
 			isActive = true
+			// Capture the state of live files to verify they don't change during refresh
+			preRefreshState, _ = readAuthFiles(fileSet)
 		}
 	}
 
@@ -61,11 +66,13 @@ func RefreshProfile(ctx context.Context, provider, profile string, vault *authfi
 	}
 
 	// If the profile was active, restore the updated files to the active location
-	if isActive {
-		// Re-verify the profile is still active before restoring.
-		// This prevents a race condition where the user switches profiles (via CLI)
-		// while the daemon is performing a refresh.
-		if currentActive, err := vault.ActiveProfile(fileSet); err == nil && currentActive == profile {
+	if isActive && len(preRefreshState) > 0 {
+		// Re-verify that the live files haven't changed since we started.
+		// We cannot use ActiveProfile here because the vault has been updated (new token),
+		// so it would no longer match the live files (old token).
+		// Instead, we verify that the live files are exactly as they were before the refresh.
+		currentState, _ := readAuthFiles(fileSet)
+		if filesEqual(preRefreshState, currentState) {
 			if restoreErr := vault.Restore(fileSet, profile); restoreErr != nil {
 				return fmt.Errorf("refresh successful but failed to update active files: %w", restoreErr)
 			}
@@ -232,4 +239,32 @@ func readNestedStringField(m map[string]interface{}, nestedKey string, keys ...s
 		return ""
 	}
 	return readStringField(nested, keys...)
+}
+
+func readAuthFiles(fileSet authfile.AuthFileSet) (map[string][]byte, error) {
+	state := make(map[string][]byte)
+	for _, spec := range fileSet.Files {
+		// Only care about existing files
+		if _, err := os.Stat(spec.Path); os.IsNotExist(err) {
+			continue
+		}
+		data, err := os.ReadFile(spec.Path)
+		if err != nil {
+			return nil, err
+		}
+		state[spec.Path] = data
+	}
+	return state, nil
+}
+
+func filesEqual(a, b map[string][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if !bytes.Equal(v, b[k]) {
+			return false
+		}
+	}
+	return true
 }
