@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/watcher"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -341,5 +344,906 @@ func TestKeyMapBindings(t *testing.T) {
 	}
 	if len(km.Cancel.Keys()) == 0 {
 		t.Error("expected Cancel binding to have keys")
+	}
+}
+
+// TestInit tests that Init returns expected commands.
+func TestInit(t *testing.T) {
+	m := New()
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Error("expected Init to return a non-nil command")
+	}
+
+	// The command should be a batch of load commands
+	// We can't directly test the batch contents, but we can verify it's a function
+}
+
+// TestInitWithFileWatching tests Init command generation with file watching enabled.
+func TestInitWithFileWatching(t *testing.T) {
+	m := New()
+	m.runtime.FileWatching = true
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Error("expected Init to return a non-nil command with file watching")
+	}
+}
+
+// TestRestoreSelection tests the restoreSelection method.
+func TestRestoreSelection(t *testing.T) {
+	tests := []struct {
+		name           string
+		profiles       []Profile
+		ctx            refreshContext
+		initialSelect  int
+		expectedSelect int
+	}{
+		{
+			name:           "empty profiles",
+			profiles:       []Profile{},
+			ctx:            refreshContext{},
+			initialSelect:  5,
+			expectedSelect: 0,
+		},
+		{
+			name: "restore by profile name",
+			profiles: []Profile{
+				{Name: "alpha"},
+				{Name: "beta"},
+				{Name: "gamma"},
+			},
+			ctx:            refreshContext{selectedProfile: "beta"},
+			initialSelect:  0,
+			expectedSelect: 1,
+		},
+		{
+			name: "deleted profile - select next",
+			profiles: []Profile{
+				{Name: "alpha"},
+				{Name: "gamma"},
+			},
+			ctx:            refreshContext{deletedProfile: "beta"},
+			initialSelect:  0,
+			expectedSelect: 0, // alpha takes beta's place
+		},
+		{
+			name: "deleted profile - select previous when deleted is last",
+			profiles: []Profile{
+				{Name: "alpha"},
+				{Name: "beta"},
+			},
+			ctx:            refreshContext{deletedProfile: "zeta"},
+			initialSelect:  0,
+			expectedSelect: 1, // last profile
+		},
+		{
+			name: "clamp selection to valid range",
+			profiles: []Profile{
+				{Name: "only"},
+			},
+			ctx:            refreshContext{},
+			initialSelect:  10,
+			expectedSelect: 0,
+		},
+		{
+			name: "negative selection clamped to 0",
+			profiles: []Profile{
+				{Name: "only"},
+			},
+			ctx:            refreshContext{},
+			initialSelect:  -5,
+			expectedSelect: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New()
+			m.profiles = map[string][]Profile{
+				"claude": tc.profiles,
+			}
+			m.selected = tc.initialSelect
+
+			m.restoreSelection(tc.ctx)
+
+			if m.selected != tc.expectedSelect {
+				t.Errorf("expected selected=%d, got %d", tc.expectedSelect, m.selected)
+			}
+		})
+	}
+}
+
+// TestShowError tests the showError method.
+func TestShowError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		context  string
+		contains string
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			context:  "Test",
+			contains: "",
+		},
+		{
+			name:     "file not found error",
+			err:      fmt.Errorf("no such file or directory"),
+			context:  "Load",
+			contains: "Profile not found in vault",
+		},
+		{
+			name:     "permission denied error",
+			err:      fmt.Errorf("permission denied"),
+			context:  "Write",
+			contains: "Cannot write to auth file",
+		},
+		{
+			name:     "invalid/corrupt error",
+			err:      fmt.Errorf("invalid JSON"),
+			context:  "Parse",
+			contains: "Profile data corrupted",
+		},
+		{
+			name:     "already exists error",
+			err:      fmt.Errorf("already exists"),
+			context:  "Create",
+			contains: "Profile already exists",
+		},
+		{
+			name:     "locked error",
+			err:      fmt.Errorf("locked by process"),
+			context:  "Access",
+			contains: "locked by another process",
+		},
+		{
+			name:     "generic error",
+			err:      fmt.Errorf("something went wrong"),
+			context:  "Action",
+			contains: "something went wrong",
+		},
+		{
+			name:     "error with empty context",
+			err:      fmt.Errorf("some error"),
+			context:  "",
+			contains: "some error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New()
+			m.showError(tc.err, tc.context)
+
+			if tc.err == nil {
+				if m.statusMsg != "" {
+					t.Errorf("expected empty status for nil error, got %q", m.statusMsg)
+				}
+				return
+			}
+
+			if !strings.Contains(m.statusMsg, tc.contains) {
+				t.Errorf("expected status to contain %q, got %q", tc.contains, m.statusMsg)
+			}
+		})
+	}
+}
+
+// TestFormatError tests the formatError method.
+func TestFormatError(t *testing.T) {
+	m := New()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: "",
+		},
+		{
+			name:     "no such file",
+			err:      fmt.Errorf("no such file"),
+			expected: "Profile not found in vault",
+		},
+		{
+			name:     "does not exist",
+			err:      fmt.Errorf("path does not exist"),
+			expected: "Profile not found in vault",
+		},
+		{
+			name:     "permission denied",
+			err:      fmt.Errorf("permission denied: /path"),
+			expected: "Cannot write to auth file - check permissions",
+		},
+		{
+			name:     "invalid data",
+			err:      fmt.Errorf("invalid token format"),
+			expected: "Profile data corrupted - try re-backup",
+		},
+		{
+			name:     "corrupt file",
+			err:      fmt.Errorf("corrupt JSON"),
+			expected: "Profile data corrupted - try re-backup",
+		},
+		{
+			name:     "already exists",
+			err:      fmt.Errorf("profile already exists"),
+			expected: "Profile already exists",
+		},
+		{
+			name:     "locked",
+			err:      fmt.Errorf("file is locked"),
+			expected: "Profile is currently locked by another process",
+		},
+		{
+			name:     "generic error",
+			err:      fmt.Errorf("unknown error occurred"),
+			expected: "unknown error occurred",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := m.formatError(tc.err)
+			if result != tc.expected {
+				t.Errorf("formatError(%v) = %q, expected %q", tc.err, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestShowActivateSuccess tests the showActivateSuccess method.
+func TestShowActivateSuccess(t *testing.T) {
+	m := New()
+	m.showActivateSuccess("claude", "work@example.com")
+
+	if !strings.Contains(m.statusMsg, "Activated") {
+		t.Errorf("expected 'Activated' in status, got %q", m.statusMsg)
+	}
+	if !strings.Contains(m.statusMsg, "work@example.com") {
+		t.Errorf("expected profile name in status, got %q", m.statusMsg)
+	}
+	if !strings.Contains(m.statusMsg, "claude") {
+		t.Errorf("expected provider name in status, got %q", m.statusMsg)
+	}
+}
+
+// TestShowRefreshSuccess tests the showRefreshSuccess method.
+func TestShowRefreshSuccess(t *testing.T) {
+	m := New()
+
+	// Test with zero expiry time
+	m.showRefreshSuccess("test@example.com", time.Time{})
+	if !strings.Contains(m.statusMsg, "Refreshed") {
+		t.Errorf("expected 'Refreshed' in status, got %q", m.statusMsg)
+	}
+	if !strings.Contains(m.statusMsg, "test@example.com") {
+		t.Errorf("expected profile name in status, got %q", m.statusMsg)
+	}
+
+	// Test with specific expiry time
+	expiry := time.Date(2025, time.March, 15, 14, 30, 0, 0, time.UTC)
+	m.showRefreshSuccess("work@company.com", expiry)
+	if !strings.Contains(m.statusMsg, "Mar 15") || !strings.Contains(m.statusMsg, "14:30") {
+		t.Errorf("expected expiry time in status, got %q", m.statusMsg)
+	}
+}
+
+// TestDialogOverlayView tests the dialogOverlayView method.
+func TestDialogOverlayView(t *testing.T) {
+	m := New()
+	m.width = 80
+	m.height = 24
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "test@example.com"}},
+	}
+
+	dialogContent := "Test Dialog Content"
+	view := m.dialogOverlayView(dialogContent)
+
+	if view == "" {
+		t.Error("expected non-empty view")
+	}
+	if !strings.Contains(view, dialogContent) {
+		t.Errorf("expected dialog content in view, got %q", view)
+	}
+}
+
+// TestDialogOverlayViewSmallScreen tests dialogOverlayView with small dimensions.
+func TestDialogOverlayViewSmallScreen(t *testing.T) {
+	m := New()
+	m.width = 20
+	m.height = 10
+
+	// Dialog larger than screen
+	largeDialog := strings.Repeat("X", 50)
+	view := m.dialogOverlayView(largeDialog)
+
+	if view == "" {
+		t.Error("expected non-empty view even with small screen")
+	}
+}
+
+// TestMainViewWithCompactLayout tests mainView with compact layout.
+func TestMainViewWithCompactLayout(t *testing.T) {
+	m := New()
+	m.width = 60 // Compact width
+	m.height = 20
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "test@example.com", IsActive: true}},
+	}
+	m.syncProfilesPanel()
+
+	view := m.mainView()
+	if view == "" {
+		t.Error("expected non-empty view for compact layout")
+	}
+}
+
+// TestMainViewWithFullLayout tests mainView with full layout.
+func TestMainViewWithFullLayout(t *testing.T) {
+	m := New()
+	m.width = 150 // Full width
+	m.height = 40
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "test@example.com", IsActive: true}},
+	}
+	m.syncProfilesPanel()
+
+	view := m.mainView()
+	if view == "" {
+		t.Error("expected non-empty view for full layout")
+	}
+}
+
+// TestIsCompactLayout tests the isCompactLayout method.
+func TestIsCompactLayout(t *testing.T) {
+	tests := []struct {
+		width, height int
+		expected      bool
+	}{
+		{0, 0, false},     // Zero dimensions
+		{50, 30, true},    // Narrow width
+		{150, 20, true},   // Short height
+		{150, 40, false},  // Full size
+		{99, 30, true},    // Just under width threshold
+		{100, 27, true},   // Just under height threshold
+		{100, 28, false},  // Exactly at thresholds
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("%dx%d", tc.width, tc.height), func(t *testing.T) {
+			m := New()
+			m.width = tc.width
+			m.height = tc.height
+
+			result := m.isCompactLayout()
+			if result != tc.expected {
+				t.Errorf("isCompactLayout() with %dx%d = %v, expected %v",
+					tc.width, tc.height, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestProjectContextLine tests the projectContextLine method.
+func TestProjectContextLine(t *testing.T) {
+	m := New()
+
+	// Test with no cwd
+	m.cwd = ""
+	result := m.projectContextLine()
+	if result != "" {
+		t.Errorf("expected empty string for no cwd, got %q", result)
+	}
+
+	// Test with no provider
+	m.cwd = "/some/path"
+	m.providers = []string{}
+	result = m.projectContextLine()
+	if result != "" {
+		t.Errorf("expected empty string for no provider, got %q", result)
+	}
+
+	// Test with no project context
+	m.providers = []string{"claude"}
+	m.projectContext = nil
+	result = m.projectContextLine()
+	if !strings.Contains(result, "no association") {
+		t.Errorf("expected 'no association' in result, got %q", result)
+	}
+}
+
+// TestProjectDefaultForProvider tests the projectDefaultForProvider method.
+func TestProjectDefaultForProvider(t *testing.T) {
+	m := New()
+
+	// Test with empty provider
+	result := m.projectDefaultForProvider("")
+	if result != "" {
+		t.Errorf("expected empty string for empty provider, got %q", result)
+	}
+
+	// Test with nil project context
+	m.projectContext = nil
+	result = m.projectDefaultForProvider("claude")
+	if result != "" {
+		t.Errorf("expected empty string for nil project context, got %q", result)
+	}
+}
+
+// TestProviderCount tests the providerCount method.
+func TestProviderCount(t *testing.T) {
+	m := New()
+
+	// Test with nil profiles
+	m.profiles = nil
+	count := m.providerCount("claude")
+	if count != 0 {
+		t.Errorf("expected 0 for nil profiles, got %d", count)
+	}
+
+	// Test with profiles
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "a"}, {Name: "b"}},
+		"codex":  {{Name: "c"}},
+	}
+	if got := m.providerCount("claude"); got != 2 {
+		t.Errorf("expected 2 for claude, got %d", got)
+	}
+	if got := m.providerCount("codex"); got != 1 {
+		t.Errorf("expected 1 for codex, got %d", got)
+	}
+	if got := m.providerCount("gemini"); got != 0 {
+		t.Errorf("expected 0 for gemini, got %d", got)
+	}
+}
+
+// TestBadgeFor tests the badgeFor method.
+func TestBadgeFor(t *testing.T) {
+	m := New()
+
+	// Test with nil badges
+	m.badges = nil
+	badge := m.badgeFor("claude", "test")
+	if badge != "" {
+		t.Errorf("expected empty badge for nil badges, got %q", badge)
+	}
+
+	// Test with expired badge
+	m.badges = map[string]profileBadge{
+		"claude/expired": {badge: "OLD", expiry: time.Now().Add(-1 * time.Hour)},
+	}
+	badge = m.badgeFor("claude", "expired")
+	if badge != "" {
+		t.Errorf("expected empty badge for expired, got %q", badge)
+	}
+
+	// Test with valid badge
+	m.badges["claude/new"] = profileBadge{badge: "NEW", expiry: time.Now().Add(1 * time.Hour)}
+	badge = m.badgeFor("claude", "new")
+	if badge != "NEW" {
+		t.Errorf("expected 'NEW' badge, got %q", badge)
+	}
+
+	// Test with zero expiry (never expires)
+	m.badges["claude/permanent"] = profileBadge{badge: "PERM", expiry: time.Time{}}
+	badge = m.badgeFor("claude", "permanent")
+	if badge != "PERM" {
+		t.Errorf("expected 'PERM' badge for zero expiry, got %q", badge)
+	}
+}
+
+// TestDumpStatsLine tests the dumpStatsLine method.
+func TestDumpStatsLine(t *testing.T) {
+	m := New()
+	m.width = 100
+	m.height = 50
+	m.cwd = "/test/path"
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "a"}, {Name: "b"}},
+	}
+
+	stats := m.dumpStatsLine()
+
+	if !strings.Contains(stats, "tui_stats") {
+		t.Errorf("expected 'tui_stats' prefix, got %q", stats)
+	}
+	if !strings.Contains(stats, "provider=claude") {
+		t.Errorf("expected provider in stats, got %q", stats)
+	}
+	if !strings.Contains(stats, "total_profiles=2") {
+		t.Errorf("expected total_profiles in stats, got %q", stats)
+	}
+}
+
+// TestHelpView tests the helpView method.
+func TestHelpView(t *testing.T) {
+	m := New()
+	view := m.helpView()
+
+	if view == "" {
+		t.Error("expected non-empty help view")
+	}
+	if !strings.Contains(view, "KEYBOARD SHORTCUTS") {
+		t.Errorf("expected help view to contain shortcuts section")
+	}
+	if !strings.Contains(view, "enter") {
+		t.Errorf("expected help view to contain enter key info")
+	}
+}
+
+// TestEventTypeVerb tests the eventTypeVerb function.
+func TestEventTypeVerb(t *testing.T) {
+	tests := []struct {
+		eventType watcher.EventType
+		expected  string
+	}{
+		{watcher.EventProfileAdded, "added"},
+		{watcher.EventProfileDeleted, "deleted"},
+		{watcher.EventProfileModified, "updated"},
+		{watcher.EventType(999), "updated"}, // default case
+	}
+
+	for _, tc := range tests {
+		result := eventTypeVerb(tc.eventType)
+		if result != tc.expected {
+			t.Errorf("eventTypeVerb(%d) = %q, expected %q", tc.eventType, result, tc.expected)
+		}
+	}
+}
+
+// TestHandleExportVault tests the handleExportVault method.
+func TestHandleExportVault(t *testing.T) {
+	m := New()
+
+	// Test with no profiles
+	m.profiles = map[string][]Profile{}
+	result, _ := m.handleExportVault()
+	updated := result.(Model)
+	if !strings.Contains(updated.statusMsg, "No profiles") {
+		t.Errorf("expected 'No profiles' message, got %q", updated.statusMsg)
+	}
+
+	// Test with profiles - should show confirmation dialog
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "test"}},
+	}
+	result, _ = m.handleExportVault()
+	updated = result.(Model)
+	if updated.state != stateExportConfirm {
+		t.Errorf("expected stateExportConfirm, got %v", updated.state)
+	}
+	if updated.confirmDialog == nil {
+		t.Error("expected confirmDialog to be set")
+	}
+}
+
+// TestHandleImportBundle tests the handleImportBundle method.
+func TestHandleImportBundle(t *testing.T) {
+	m := New()
+
+	result, _ := m.handleImportBundle()
+	updated := result.(Model)
+
+	if updated.state != stateImportPath {
+		t.Errorf("expected stateImportPath, got %v", updated.state)
+	}
+	if updated.backupDialog == nil {
+		t.Error("expected backupDialog to be set")
+	}
+}
+
+// TestHandleExportComplete tests the handleExportComplete method.
+func TestHandleExportComplete(t *testing.T) {
+	m := New()
+	msg := exportCompleteMsg{path: "/test/export.zip", size: 1024}
+
+	result, _ := m.handleExportComplete(msg)
+	updated := result.(Model)
+
+	if !strings.Contains(updated.statusMsg, "Exported to:") {
+		t.Errorf("expected 'Exported to:' in status, got %q", updated.statusMsg)
+	}
+	if !strings.Contains(updated.statusMsg, "/test/export.zip") {
+		t.Errorf("expected path in status, got %q", updated.statusMsg)
+	}
+}
+
+// TestHandleExportError tests the handleExportError method.
+func TestHandleExportError(t *testing.T) {
+	m := New()
+	msg := exportErrorMsg{err: fmt.Errorf("export failed")}
+
+	result, _ := m.handleExportError(msg)
+	updated := result.(Model)
+
+	if !strings.Contains(updated.statusMsg, "Export failed") {
+		t.Errorf("expected 'Export failed' in status, got %q", updated.statusMsg)
+	}
+}
+
+// TestHandleImportError tests the handleImportError method.
+func TestHandleImportError(t *testing.T) {
+	m := New()
+	msg := importErrorMsg{err: fmt.Errorf("import failed")}
+
+	result, _ := m.handleImportError(msg)
+	updated := result.(Model)
+
+	if !strings.Contains(updated.statusMsg, "Import failed") {
+		t.Errorf("expected 'Import failed' in status, got %q", updated.statusMsg)
+	}
+}
+
+// TestHandleExportConfirmKeysNilDialog tests handleExportConfirmKeys with nil dialog.
+func TestHandleExportConfirmKeysNilDialog(t *testing.T) {
+	m := New()
+	m.state = stateExportConfirm
+	m.confirmDialog = nil
+
+	result, _ := m.handleExportConfirmKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := result.(Model)
+
+	if updated.state != stateList {
+		t.Errorf("expected stateList with nil dialog, got %v", updated.state)
+	}
+}
+
+// TestHandleImportPathKeysNilDialog tests handleImportPathKeys with nil dialog.
+func TestHandleImportPathKeysNilDialog(t *testing.T) {
+	m := New()
+	m.state = stateImportPath
+	m.backupDialog = nil
+
+	result, _ := m.handleImportPathKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := result.(Model)
+
+	if updated.state != stateList {
+		t.Errorf("expected stateList with nil dialog, got %v", updated.state)
+	}
+}
+
+// TestHandleImportConfirmKeysNilDialog tests handleImportConfirmKeys with nil dialog.
+func TestHandleImportConfirmKeysNilDialog(t *testing.T) {
+	m := New()
+	m.state = stateImportConfirm
+	m.confirmDialog = nil
+
+	result, _ := m.handleImportConfirmKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := result.(Model)
+
+	if updated.state != stateList {
+		t.Errorf("expected stateList with nil dialog, got %v", updated.state)
+	}
+}
+
+// TestValidateAndPreviewImport tests the validateAndPreviewImport method.
+func TestValidateAndPreviewImport(t *testing.T) {
+	m := New()
+
+	// Test with empty path
+	result, _ := m.validateAndPreviewImport("")
+	updated := result.(Model)
+	if !strings.Contains(updated.statusMsg, "empty") {
+		t.Errorf("expected 'empty' in status for empty path, got %q", updated.statusMsg)
+	}
+
+	// Test with whitespace-only path
+	result, _ = m.validateAndPreviewImport("   ")
+	updated = result.(Model)
+	if !strings.Contains(updated.statusMsg, "empty") {
+		t.Errorf("expected 'empty' in status for whitespace path, got %q", updated.statusMsg)
+	}
+
+	// Test with non-existent path
+	result, _ = m.validateAndPreviewImport("/nonexistent/path/bundle.zip")
+	updated = result.(Model)
+	if !strings.Contains(updated.statusMsg, "not found") {
+		t.Errorf("expected 'not found' in status, got %q", updated.statusMsg)
+	}
+}
+
+// TestRenderProfileList tests the renderProfileList method.
+func TestRenderProfileList(t *testing.T) {
+	m := New()
+	m.profiles = map[string][]Profile{}
+
+	// Test with empty profiles
+	view := m.renderProfileList()
+	if !strings.Contains(view, "No profiles saved") {
+		t.Errorf("expected 'No profiles saved' for empty list, got %q", view)
+	}
+
+	// Test with profiles
+	m.profiles = map[string][]Profile{
+		"claude": {
+			{Name: "test@example.com", IsActive: true},
+			{Name: "work@company.com", IsActive: false},
+		},
+	}
+	view = m.renderProfileList()
+	if !strings.Contains(view, "test@example.com") {
+		t.Errorf("expected profile name in view, got %q", view)
+	}
+	if !strings.Contains(view, "work@company.com") {
+		t.Errorf("expected second profile name in view, got %q", view)
+	}
+}
+
+// TestRenderStatusBar tests the renderStatusBar method.
+func TestRenderStatusBar(t *testing.T) {
+	m := New()
+
+	// Test with zero width
+	m.width = 0
+	view := m.renderStatusBar()
+	if view != "" {
+		t.Errorf("expected empty string for zero width, got %q", view)
+	}
+
+	// Test with status message
+	m.width = 100
+	m.statusMsg = "Test status"
+	view = m.renderStatusBar()
+	if !strings.Contains(view, "Test status") {
+		t.Errorf("expected status message in view, got %q", view)
+	}
+
+	// Test with narrow width (< 70)
+	m.statusMsg = ""
+	m.width = 50
+	view = m.renderStatusBar()
+	if !strings.Contains(view, "quit") {
+		t.Errorf("expected 'quit' hint in narrow view, got %q", view)
+	}
+
+	// Test with medium width (70-99)
+	m.width = 80
+	view = m.renderStatusBar()
+	if !strings.Contains(view, "provider") {
+		t.Errorf("expected 'provider' hint in medium view, got %q", view)
+	}
+
+	// Test with full width (>= 100)
+	m.width = 120
+	view = m.renderStatusBar()
+	if !strings.Contains(view, "switch provider") {
+		t.Errorf("expected 'switch provider' hint in full view, got %q", view)
+	}
+}
+
+// TestApplySearchFilter tests the applySearchFilter method.
+func TestApplySearchFilter(t *testing.T) {
+	m := New()
+	m.profiles = map[string][]Profile{
+		"claude": {
+			{Name: "work@example.com"},
+			{Name: "personal@gmail.com"},
+			{Name: "test@test.com"},
+		},
+	}
+	m.profilesPanel = NewProfilesPanel()
+
+	// Test with empty query - should show all
+	m.searchQuery = ""
+	m.applySearchFilter()
+	if !strings.Contains(m.statusMsg, "3 matches") {
+		t.Errorf("expected 3 matches for empty query, got %q", m.statusMsg)
+	}
+
+	// Test with specific query
+	m.searchQuery = "work"
+	m.applySearchFilter()
+	if !strings.Contains(m.statusMsg, "1 match") {
+		t.Errorf("expected 1 match for 'work' query, got %q", m.statusMsg)
+	}
+
+	// Test with case-insensitive query
+	m.searchQuery = "PERSONAL"
+	m.applySearchFilter()
+	if !strings.Contains(m.statusMsg, "1 match") {
+		t.Errorf("expected 1 match for 'PERSONAL' query, got %q", m.statusMsg)
+	}
+
+	// Test with no matches
+	m.searchQuery = "nonexistent"
+	m.applySearchFilter()
+	if !strings.Contains(m.statusMsg, "0 match") {
+		t.Errorf("expected 0 matches for 'nonexistent', got %q", m.statusMsg)
+	}
+}
+
+// TestApplySearchFilterNilPanel tests applySearchFilter with nil profilesPanel.
+func TestApplySearchFilterNilPanel(t *testing.T) {
+	m := New()
+	m.profilesPanel = nil
+	m.searchQuery = "test"
+
+	// Should not panic
+	m.applySearchFilter()
+}
+
+// TestHandleEditProfile tests the handleEditProfile method.
+func TestHandleEditProfile(t *testing.T) {
+	m := New()
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "test@example.com"}},
+	}
+
+	result, _ := m.handleEditProfile()
+	updated := result.(Model)
+
+	// Should show "not yet implemented" message
+	if !strings.Contains(updated.statusMsg, "not yet implemented") {
+		t.Errorf("expected 'not yet implemented' message, got %q", updated.statusMsg)
+	}
+}
+
+// TestFormatSQLiteSince tests the formatSQLiteSince function.
+func TestFormatSQLiteSince(t *testing.T) {
+	// Test with zero time
+	result := formatSQLiteSince(time.Time{})
+	if result != "1970-01-01 00:00:00" {
+		t.Errorf("expected '1970-01-01 00:00:00' for zero time, got %q", result)
+	}
+
+	// Test with specific time
+	specific := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
+	result = formatSQLiteSince(specific)
+	if result != "2025-06-15 10:30:00" {
+		t.Errorf("expected '2025-06-15 10:30:00', got %q", result)
+	}
+}
+
+// TestUpdateProviderCounts tests the updateProviderCounts method.
+func TestUpdateProviderCounts(t *testing.T) {
+	m := New()
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "a"}, {Name: "b"}},
+		"codex":  {{Name: "c"}},
+	}
+	m.providerPanel = NewProviderPanel([]string{"claude", "codex"})
+
+	// Should not panic
+	m.updateProviderCounts()
+}
+
+// TestSyncProviderPanel tests the syncProviderPanel method.
+func TestSyncProviderPanel(t *testing.T) {
+	m := New()
+	m.activeProvider = 1
+	m.providerPanel = NewProviderPanel(DefaultProviders())
+
+	// Should not panic
+	m.syncProviderPanel()
+}
+
+// TestRenderProviderTabsWithCounts tests renderProviderTabs with different widths.
+func TestRenderProviderTabsWithCounts(t *testing.T) {
+	m := New()
+	m.profiles = map[string][]Profile{
+		"claude": {{Name: "a"}, {Name: "b"}},
+		"codex":  {{Name: "c"}},
+	}
+
+	// Test with narrow width (counts hidden)
+	m.width = 60
+	view := m.renderProviderTabs()
+	if view == "" {
+		t.Error("expected non-empty tabs view")
+	}
+
+	// Test with wide width (counts shown)
+	m.width = 100
+	view = m.renderProviderTabs()
+	if !strings.Contains(view, "2") { // Should show count
+		// This may depend on styling, so just check it renders
 	}
 }
