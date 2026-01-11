@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -473,3 +474,353 @@ func (h *ExtendedHarness) TimeStep(name, description string, fn func()) time.Dur
 	defer h.EndStep(name)
 	return h.TimeIt(fmt.Sprintf("step.%s.inner", name), fn)
 }
+
+// =============================================================================
+// JSON Export and CI Artifact Support
+// =============================================================================
+
+// ExportReport represents a complete test report for JSON export and CI artifacts.
+type ExportReport struct {
+	// Metadata
+	TestName    string    `json:"test_name"`
+	Package     string    `json:"package,omitempty"`
+	StartTime   time.Time `json:"start_time"`
+	EndTime     time.Time `json:"end_time"`
+	DurationMs  int64     `json:"duration_ms"`
+	Passed      bool      `json:"passed"`
+	Environment []string  `json:"environment,omitempty"`
+
+	// Execution details
+	StepCount  int        `json:"step_count"`
+	ErrorCount int        `json:"error_count"`
+	Steps      []*StepLog `json:"steps"`
+
+	// Metrics for performance tracking
+	Metrics map[string]MetricValue `json:"metrics"`
+
+	// Log entries
+	LogEntries []json.RawMessage `json:"log_entries"`
+
+	// Failure context (populated on test failure)
+	FailureContext *FailureContext `json:"failure_context,omitempty"`
+}
+
+// MetricValue represents a metric with its value and metadata.
+type MetricValue struct {
+	Value    string `json:"value"`
+	ValueMs  int64  `json:"value_ms"`
+	Category string `json:"category,omitempty"`
+}
+
+// FailureContext captures context around a test failure.
+type FailureContext struct {
+	LastLogLines []string          `json:"last_log_lines"`
+	OpenSteps    []string          `json:"open_steps,omitempty"`
+	EnvVars      map[string]string `json:"env_vars,omitempty"`
+	FileStates   map[string]string `json:"file_states,omitempty"`
+}
+
+// ExportJSON exports the complete test report to a JSON file.
+// This is useful for CI artifact collection and test result aggregation.
+func (h *ExtendedHarness) ExportJSON(path string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	report := h.buildReportUnsafe()
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal report: %w", err)
+	}
+
+	if err := writeFileAtomic(path, data, 0644); err != nil {
+		return fmt.Errorf("write report: %w", err)
+	}
+
+	return nil
+}
+
+// buildReportUnsafe builds an ExportReport. Caller must hold h.mu.
+func (h *ExtendedHarness) buildReportUnsafe() *ExportReport {
+	endTime := time.Now()
+	duration := endTime.Sub(h.startTime)
+
+	// Parse log entries
+	lines := strings.Split(strings.TrimSpace(h.logBuffer.String()), "\n")
+	logEntries := make([]json.RawMessage, 0, len(lines))
+	for _, line := range lines {
+		if line != "" {
+			logEntries = append(logEntries, json.RawMessage(line))
+		}
+	}
+
+	// Convert metrics
+	metrics := make(map[string]MetricValue, len(h.metrics))
+	for k, v := range h.metrics {
+		category := "custom"
+		if strings.HasPrefix(k, "step.") {
+			category = "step"
+		}
+		metrics[k] = MetricValue{
+			Value:    v.String(),
+			ValueMs:  v.Milliseconds(),
+			Category: category,
+		}
+	}
+
+	// Collect open steps if any
+	var openSteps []string
+	for _, s := range h.stepStack {
+		openSteps = append(openSteps, s.Name)
+	}
+
+	report := &ExportReport{
+		TestName:   h.T.Name(),
+		StartTime:  h.startTime,
+		EndTime:    endTime,
+		DurationMs: duration.Milliseconds(),
+		Passed:     !h.T.Failed(),
+		StepCount:  h.stepCount,
+		ErrorCount: h.errorCount,
+		Steps:      h.stepLogs,
+		Metrics:    metrics,
+		LogEntries: logEntries,
+	}
+
+	// Add failure context if test failed
+	if h.T.Failed() {
+		report.FailureContext = &FailureContext{
+			LastLogLines: h.lastLogLinesUnsafe(10),
+			OpenSteps:    openSteps,
+			EnvVars:      h.relevantEnvVars(),
+		}
+	}
+
+	return report
+}
+
+// lastLogLinesUnsafe returns the last N log lines. Caller must hold h.mu.
+func (h *ExtendedHarness) lastLogLinesUnsafe(n int) []string {
+	lines := strings.Split(strings.TrimSpace(h.logBuffer.String()), "\n")
+	if len(lines) <= n {
+		return lines
+	}
+	return lines[len(lines)-n:]
+}
+
+// relevantEnvVars returns environment variables relevant to test execution.
+func (h *ExtendedHarness) relevantEnvVars() map[string]string {
+	relevant := []string{
+		"HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+		"CODEX_HOME", "CLAUDE_HOME", "GEMINI_HOME",
+		"CAAM_PROFILES_DIR", "CAAM_DEBUG",
+		"CI", "GITHUB_ACTIONS", "GITLAB_CI",
+	}
+
+	result := make(map[string]string)
+	for _, key := range relevant {
+		if val, ok := lookupEnv(key); ok {
+			result[key] = val
+		}
+	}
+	return result
+}
+
+// GetReport returns the current test report without writing to file.
+func (h *ExtendedHarness) GetReport() *ExportReport {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.buildReportUnsafe()
+}
+
+// =============================================================================
+// Performance Baseline Comparison
+// =============================================================================
+
+// BaselineMetrics represents historical baseline metrics for comparison.
+type BaselineMetrics struct {
+	TestName    string                 `json:"test_name"`
+	RecordedAt  time.Time              `json:"recorded_at"`
+	Metrics     map[string]MetricValue `json:"metrics"`
+	TotalTimeMs int64                  `json:"total_time_ms"`
+}
+
+// PerformanceComparison represents the result of comparing against a baseline.
+type PerformanceComparison struct {
+	TestName      string                   `json:"test_name"`
+	BaselineDate  time.Time                `json:"baseline_date"`
+	CurrentTimeMs int64                    `json:"current_time_ms"`
+	BaselineMs    int64                    `json:"baseline_ms"`
+	DeltaMs       int64                    `json:"delta_ms"`
+	DeltaPercent  float64                  `json:"delta_percent"`
+	Regressions   []MetricRegression       `json:"regressions,omitempty"`
+	Improvements  []MetricRegression       `json:"improvements,omitempty"`
+	Threshold     float64                  `json:"threshold_percent"`
+	IsRegression  bool                     `json:"is_regression"`
+}
+
+// MetricRegression represents a single metric that regressed or improved.
+type MetricRegression struct {
+	Name         string  `json:"name"`
+	CurrentMs    int64   `json:"current_ms"`
+	BaselineMs   int64   `json:"baseline_ms"`
+	DeltaPercent float64 `json:"delta_percent"`
+}
+
+// CompareToBaseline compares current metrics against a baseline.
+// Returns nil if baseline is nil or empty.
+// threshold is the percentage change that triggers a regression flag (e.g., 0.2 = 20%).
+func (h *ExtendedHarness) CompareToBaseline(baseline *BaselineMetrics, threshold float64) *PerformanceComparison {
+	if baseline == nil || len(baseline.Metrics) == 0 {
+		return nil
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	currentDuration := time.Since(h.startTime).Milliseconds()
+
+	comparison := &PerformanceComparison{
+		TestName:      h.T.Name(),
+		BaselineDate:  baseline.RecordedAt,
+		CurrentTimeMs: currentDuration,
+		BaselineMs:    baseline.TotalTimeMs,
+		Threshold:     threshold,
+	}
+
+	if baseline.TotalTimeMs > 0 {
+		comparison.DeltaMs = currentDuration - baseline.TotalTimeMs
+		comparison.DeltaPercent = float64(comparison.DeltaMs) / float64(baseline.TotalTimeMs)
+	}
+
+	// Compare individual metrics
+	for name, baselineVal := range baseline.Metrics {
+		if currentVal, ok := h.metrics[name]; ok {
+			currentMs := currentVal.Milliseconds()
+			baseMs := baselineVal.ValueMs
+
+			if baseMs > 0 {
+				delta := float64(currentMs-baseMs) / float64(baseMs)
+
+				if delta > threshold {
+					comparison.Regressions = append(comparison.Regressions, MetricRegression{
+						Name:         name,
+						CurrentMs:    currentMs,
+						BaselineMs:   baseMs,
+						DeltaPercent: delta,
+					})
+				} else if delta < -threshold {
+					comparison.Improvements = append(comparison.Improvements, MetricRegression{
+						Name:         name,
+						CurrentMs:    currentMs,
+						BaselineMs:   baseMs,
+						DeltaPercent: delta,
+					})
+				}
+			}
+		}
+	}
+
+	// Flag overall regression if total time increased beyond threshold
+	comparison.IsRegression = comparison.DeltaPercent > threshold || len(comparison.Regressions) > 0
+
+	return comparison
+}
+
+// SaveBaseline saves current metrics as a baseline for future comparison.
+func (h *ExtendedHarness) SaveBaseline(path string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	metrics := make(map[string]MetricValue, len(h.metrics))
+	for k, v := range h.metrics {
+		metrics[k] = MetricValue{
+			Value:   v.String(),
+			ValueMs: v.Milliseconds(),
+		}
+	}
+
+	baseline := BaselineMetrics{
+		TestName:    h.T.Name(),
+		RecordedAt:  time.Now(),
+		Metrics:     metrics,
+		TotalTimeMs: time.Since(h.startTime).Milliseconds(),
+	}
+
+	data, err := json.MarshalIndent(baseline, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal baseline: %w", err)
+	}
+
+	return writeFileAtomic(path, data, 0644)
+}
+
+// LoadBaseline loads a baseline from a JSON file.
+func LoadBaseline(path string) (*BaselineMetrics, error) {
+	data, err := readFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var baseline BaselineMetrics
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		return nil, fmt.Errorf("parse baseline: %w", err)
+	}
+
+	return &baseline, nil
+}
+
+// =============================================================================
+// File I/O Helpers (mockable for testing)
+// =============================================================================
+
+var (
+	writeFileAtomic func(path string, data []byte, perm os.FileMode) error = defaultWriteFileAtomic
+	readFile        func(path string) ([]byte, error)                      = defaultReadFile
+	lookupEnv       func(key string) (string, bool)                        = defaultLookupEnv
+)
+
+func defaultWriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return atomicWriteFile(path, data, perm)
+}
+
+func defaultReadFile(path string) ([]byte, error) {
+	return readFileBytes(path)
+}
+
+func defaultLookupEnv(key string) (string, bool) {
+	return lookupEnvDefault(key)
+}
+
+// atomicWriteFile writes data to a file atomically using temp file + rename.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	// Write to temp file first
+	tmpPath := path + ".tmp"
+	if err := writeFileDirect(tmpPath, data, perm); err != nil {
+		return err
+	}
+
+	// Rename atomically
+	return renameFile(tmpPath, path)
+}
+
+// readFileBytes reads a file and returns its contents.
+func readFileBytes(path string) ([]byte, error) {
+	return readFileDirect(path)
+}
+
+// lookupEnvDefault looks up an environment variable.
+func lookupEnvDefault(key string) (string, bool) {
+	return getenv(key)
+}
+
+// =============================================================================
+// OS abstraction layer (for testing)
+// =============================================================================
+
+var (
+	writeFileDirect = os.WriteFile
+	readFileDirect  = os.ReadFile
+	renameFile      = os.Rename
+	getenv          = func(key string) (string, bool) { return os.LookupEnv(key) }
+)

@@ -381,3 +381,322 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// =============================================================================
+// Tests for JSON Export and CI Artifact Support
+// =============================================================================
+
+func TestExtendedHarness_ExportJSON(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Add some test data
+	h.StartStep("export_test", "Testing JSON export")
+	h.LogInfo("test log entry")
+	h.RecordMetric("test_metric", 100*time.Millisecond)
+	h.EndStep("export_test")
+
+	// Export to temp file
+	tmpFile := h.WriteFile("export.json", "")
+	err := h.ExportJSON(tmpFile)
+	if err != nil {
+		t.Fatalf("ExportJSON failed: %v", err)
+	}
+
+	// Verify file was created and contains expected data
+	if !h.FileExists(tmpFile) {
+		t.Error("Export file should exist")
+	}
+	if !h.FileContains(tmpFile, "test_name") {
+		t.Error("Export should contain 'test_name'")
+	}
+	if !h.FileContains(tmpFile, "export_test") {
+		t.Error("Export should contain step name 'export_test'")
+	}
+	if !h.FileContains(tmpFile, "test_metric") {
+		t.Error("Export should contain metric 'test_metric'")
+	}
+	if !h.FileContains(tmpFile, "log_entries") {
+		t.Error("Export should contain 'log_entries'")
+	}
+}
+
+func TestExtendedHarness_GetReport(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	h.StartStep("report_test", "Testing report generation")
+	h.LogInfo("test log")
+	h.RecordMetric("custom", 50*time.Millisecond)
+	h.EndStep("report_test")
+
+	report := h.GetReport()
+
+	if report == nil {
+		t.Fatal("GetReport should not return nil")
+	}
+	if report.TestName != t.Name() {
+		t.Errorf("TestName = %q, want %q", report.TestName, t.Name())
+	}
+	if report.StepCount != 1 {
+		t.Errorf("StepCount = %d, want 1", report.StepCount)
+	}
+	if len(report.Steps) != 1 {
+		t.Errorf("len(Steps) = %d, want 1", len(report.Steps))
+	}
+	if len(report.Metrics) == 0 {
+		t.Error("Metrics should not be empty")
+	}
+	if _, ok := report.Metrics["custom"]; !ok {
+		t.Error("Metrics should contain 'custom'")
+	}
+	if report.DurationMs <= 0 {
+		t.Error("DurationMs should be positive")
+	}
+}
+
+func TestExtendedHarness_ReportMetricCategories(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	h.StartStep("category_test", "")
+	h.EndStep("category_test")
+	h.RecordMetric("custom_metric", 100*time.Millisecond)
+
+	report := h.GetReport()
+
+	// Check step metrics have "step" category
+	stepMetric, ok := report.Metrics["step.category_test"]
+	if !ok {
+		t.Fatal("Missing step.category_test metric")
+	}
+	if stepMetric.Category != "step" {
+		t.Errorf("step metric category = %q, want 'step'", stepMetric.Category)
+	}
+
+	// Check custom metrics have "custom" category
+	customMetric, ok := report.Metrics["custom_metric"]
+	if !ok {
+		t.Fatal("Missing custom_metric")
+	}
+	if customMetric.Category != "custom" {
+		t.Errorf("custom metric category = %q, want 'custom'", customMetric.Category)
+	}
+}
+
+func TestExtendedHarness_RelevantEnvVars(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Set some relevant env vars
+	h.SetEnv("CAAM_DEBUG", "true")
+	h.SetEnv("CI", "true")
+
+	report := h.GetReport()
+
+	// Since test didn't fail, FailureContext should be nil
+	if report.FailureContext != nil {
+		// If for some reason it's not nil, check the env vars
+		if report.FailureContext.EnvVars == nil {
+			t.Error("EnvVars should not be nil in failure context")
+		}
+	}
+}
+
+// =============================================================================
+// Tests for Performance Baseline Comparison
+// =============================================================================
+
+func TestExtendedHarness_SaveAndLoadBaseline(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Record some metrics
+	h.RecordMetric("api_latency", 100*time.Millisecond)
+	h.RecordMetric("db_query", 50*time.Millisecond)
+
+	// Save baseline
+	baselinePath := h.WriteFile("baseline.json", "")
+	err := h.SaveBaseline(baselinePath)
+	if err != nil {
+		t.Fatalf("SaveBaseline failed: %v", err)
+	}
+
+	// Load baseline
+	baseline, err := LoadBaseline(baselinePath)
+	if err != nil {
+		t.Fatalf("LoadBaseline failed: %v", err)
+	}
+
+	if baseline.TestName != t.Name() {
+		t.Errorf("TestName = %q, want %q", baseline.TestName, t.Name())
+	}
+	if len(baseline.Metrics) != 2 {
+		t.Errorf("len(Metrics) = %d, want 2", len(baseline.Metrics))
+	}
+	if baseline.Metrics["api_latency"].ValueMs != 100 {
+		t.Errorf("api_latency = %d, want 100", baseline.Metrics["api_latency"].ValueMs)
+	}
+}
+
+func TestExtendedHarness_CompareToBaseline_NoRegression(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Create baseline with same values
+	baseline := &BaselineMetrics{
+		TestName:    t.Name(),
+		RecordedAt:  time.Now().Add(-24 * time.Hour),
+		TotalTimeMs: 100,
+		Metrics: map[string]MetricValue{
+			"api_latency": {Value: "100ms", ValueMs: 100},
+		},
+	}
+
+	// Record similar metrics (within threshold)
+	h.RecordMetric("api_latency", 105*time.Millisecond) // 5% increase, within 20% threshold
+
+	comparison := h.CompareToBaseline(baseline, 0.2) // 20% threshold
+
+	if comparison == nil {
+		t.Fatal("CompareToBaseline should not return nil")
+	}
+	if comparison.IsRegression {
+		t.Error("Should not be flagged as regression within threshold")
+	}
+	if len(comparison.Regressions) > 0 {
+		t.Errorf("Should have no regressions, got %d", len(comparison.Regressions))
+	}
+}
+
+func TestExtendedHarness_CompareToBaseline_WithRegression(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Create baseline
+	baseline := &BaselineMetrics{
+		TestName:    t.Name(),
+		RecordedAt:  time.Now().Add(-24 * time.Hour),
+		TotalTimeMs: 100,
+		Metrics: map[string]MetricValue{
+			"api_latency": {Value: "100ms", ValueMs: 100},
+		},
+	}
+
+	// Record significantly worse metrics (50% increase)
+	h.RecordMetric("api_latency", 150*time.Millisecond)
+
+	comparison := h.CompareToBaseline(baseline, 0.2) // 20% threshold
+
+	if comparison == nil {
+		t.Fatal("CompareToBaseline should not return nil")
+	}
+	if !comparison.IsRegression {
+		t.Error("Should be flagged as regression")
+	}
+	if len(comparison.Regressions) != 1 {
+		t.Errorf("Should have 1 regression, got %d", len(comparison.Regressions))
+	}
+	if comparison.Regressions[0].Name != "api_latency" {
+		t.Errorf("Regression name = %q, want 'api_latency'", comparison.Regressions[0].Name)
+	}
+}
+
+func TestExtendedHarness_CompareToBaseline_WithImprovement(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Create baseline
+	baseline := &BaselineMetrics{
+		TestName:    t.Name(),
+		RecordedAt:  time.Now().Add(-24 * time.Hour),
+		TotalTimeMs: 100,
+		Metrics: map[string]MetricValue{
+			"api_latency": {Value: "100ms", ValueMs: 100},
+		},
+	}
+
+	// Record significantly better metrics (50% improvement)
+	h.RecordMetric("api_latency", 50*time.Millisecond)
+
+	comparison := h.CompareToBaseline(baseline, 0.2) // 20% threshold
+
+	if comparison == nil {
+		t.Fatal("CompareToBaseline should not return nil")
+	}
+	if comparison.IsRegression {
+		t.Error("Should not be flagged as regression for improvement")
+	}
+	if len(comparison.Improvements) != 1 {
+		t.Errorf("Should have 1 improvement, got %d", len(comparison.Improvements))
+	}
+}
+
+func TestExtendedHarness_CompareToBaseline_NilBaseline(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	comparison := h.CompareToBaseline(nil, 0.2)
+	if comparison != nil {
+		t.Error("CompareToBaseline should return nil for nil baseline")
+	}
+}
+
+func TestExtendedHarness_CompareToBaseline_EmptyBaseline(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	baseline := &BaselineMetrics{
+		TestName: t.Name(),
+		Metrics:  map[string]MetricValue{},
+	}
+
+	comparison := h.CompareToBaseline(baseline, 0.2)
+	if comparison != nil {
+		t.Error("CompareToBaseline should return nil for empty baseline metrics")
+	}
+}
+
+func TestLoadBaseline_NonExistent(t *testing.T) {
+	_, err := LoadBaseline("/nonexistent/path/baseline.json")
+	if err == nil {
+		t.Error("LoadBaseline should fail for non-existent file")
+	}
+}
+
+func TestExtendedHarness_LastLogLines(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Log more than 10 entries
+	for i := 0; i < 15; i++ {
+		h.LogInfo("log entry", "index", i)
+	}
+
+	// Use buildReportUnsafe to get last log lines
+	h.mu.Lock()
+	lines := h.lastLogLinesUnsafe(10)
+	h.mu.Unlock()
+
+	if len(lines) != 10 {
+		t.Errorf("lastLogLinesUnsafe(10) returned %d lines, want 10", len(lines))
+	}
+}
+
+func TestExtendedHarness_LastLogLines_LessThanN(t *testing.T) {
+	h := NewExtendedHarness(t)
+	defer h.Close()
+
+	// Log only 5 entries
+	for i := 0; i < 5; i++ {
+		h.LogInfo("log entry", "index", i)
+	}
+
+	h.mu.Lock()
+	lines := h.lastLogLinesUnsafe(10)
+	h.mu.Unlock()
+
+	if len(lines) != 5 {
+		t.Errorf("lastLogLinesUnsafe(10) with 5 entries returned %d lines, want 5", len(lines))
+	}
+}
