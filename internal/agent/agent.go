@@ -154,6 +154,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Start polling for requests if coordinator URL is set
 	if a.config.CoordinatorURL != "" {
 		go a.pollLoop(ctx)
+	} else {
+		// Close doneCh immediately since pollLoop won't be started to close it
+		close(a.doneCh)
 	}
 
 	// Start HTTP server
@@ -194,6 +197,9 @@ func (a *Agent) Stop(ctx context.Context) error {
 	if a.browser != nil {
 		a.browser.Close()
 	}
+
+	// Wait for pollLoop to finish (or immediately if it wasn't started)
+	<-a.doneCh
 
 	// Save usage data
 	a.saveUsage()
