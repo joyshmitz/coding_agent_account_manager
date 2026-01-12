@@ -110,6 +110,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return fmt.Errorf("coordinator already running")
 	}
 	c.running = true
+	// Recreate channels for this run (in case of restart after Stop)
+	c.stopCh = make(chan struct{})
+	c.doneCh = make(chan struct{})
 	c.mu.Unlock()
 
 	go c.monitorLoop(ctx)

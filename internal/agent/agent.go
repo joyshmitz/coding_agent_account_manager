@@ -126,6 +126,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("agent already running")
 	}
 	a.running = true
+	// Recreate channels for this run (in case of restart after Stop)
+	a.stopCh = make(chan struct{})
+	a.doneCh = make(chan struct{})
 	a.mu.Unlock()
 
 	// Initialize browser
