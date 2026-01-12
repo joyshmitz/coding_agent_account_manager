@@ -2,7 +2,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -534,11 +533,14 @@ func buildProfileInfo(tool, profileName, activeProfile string, db *caamdb.DB, co
 }
 
 func getHealthReason(ph *health.ProfileHealth, status health.HealthStatus) string {
+	// Use thresholds from health.DefaultHealthConfig()
+	cfg := health.DefaultHealthConfig()
+
 	if status == health.StatusCritical {
 		if !ph.TokenExpiresAt.IsZero() && time.Until(ph.TokenExpiresAt) <= 0 {
 			return "token expired"
 		}
-		if ph.ErrorCount1h >= 5 {
+		if ph.ErrorCount1h >= cfg.ErrorCountCritical {
 			return fmt.Sprintf("high error rate (%d errors in 1h)", ph.ErrorCount1h)
 		}
 	}
@@ -546,7 +548,7 @@ func getHealthReason(ph *health.ProfileHealth, status health.HealthStatus) strin
 		if !ph.TokenExpiresAt.IsZero() && time.Until(ph.TokenExpiresAt) < 24*time.Hour {
 			return "token expiring soon"
 		}
-		if ph.ErrorCount1h >= 2 {
+		if ph.ErrorCount1h >= cfg.ErrorCountWarning {
 			return fmt.Sprintf("elevated error rate (%d errors in 1h)", ph.ErrorCount1h)
 		}
 	}
@@ -1109,6 +1111,17 @@ func runRobotWatch(cmd *cobra.Command, args []string) error {
 	interval, _ := cmd.Flags().GetInt("interval")
 	providerFilter, _ := cmd.Flags().GetString("provider")
 
+	// Validate provider filter if specified
+	if providerFilter != "" {
+		providerFilter = strings.ToLower(providerFilter)
+		if _, ok := tools[providerFilter]; !ok {
+			return robotError(cmd, "watch", "INVALID_PROVIDER",
+				fmt.Sprintf("unknown provider: %s", providerFilter),
+				"valid providers: codex, claude, gemini",
+				nil)
+		}
+	}
+
 	if interval < 1 {
 		interval = 1
 	}
@@ -1116,14 +1129,7 @@ func runRobotWatch(cmd *cobra.Command, args []string) error {
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
-	// Handle interrupt
-	ctx, cancel := context.WithCancel(cmd.Context())
-	defer cancel()
-
-	go func() {
-		<-ctx.Done()
-		ticker.Stop()
-	}()
+	ctx := cmd.Context()
 
 	// Emit initial status
 	emitWatchStatus(cmd, providerFilter)
