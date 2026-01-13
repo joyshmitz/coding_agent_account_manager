@@ -352,6 +352,7 @@ func runRobotStatus(cmd *cobra.Command, args []string) error {
 
 	var suggestions []string
 
+	var usableProfiles int
 	for _, tool := range providersToCheck {
 		provInfo := buildProviderInfo(tool, compact)
 		data.Providers = append(data.Providers, provInfo)
@@ -362,11 +363,18 @@ func runRobotStatus(cmd *cobra.Command, args []string) error {
 			data.Summary.ActiveProfiles++
 		}
 		for _, p := range provInfo.Profiles {
-			if p.Health.Status == "healthy" {
+			isHealthy := p.Health.Status == "healthy"
+			inCooldown := p.Cooldown != nil && p.Cooldown.Active
+
+			if isHealthy {
 				data.Summary.HealthyProfiles++
 			}
-			if p.Cooldown != nil && p.Cooldown.Active {
+			if inCooldown {
 				data.Summary.CooldownProfiles++
+			}
+			// Count profiles that are usable (healthy AND not in cooldown)
+			if isHealthy && !inCooldown {
+				usableProfiles++
 			}
 			if p.Health.ExpiresAt != "" {
 				if exp, err := time.Parse(time.RFC3339, p.Health.ExpiresAt); err == nil {
@@ -379,7 +387,6 @@ func runRobotStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check if all profiles are blocked (cooldown or unhealthy)
-	usableProfiles := data.Summary.HealthyProfiles - data.Summary.CooldownProfiles
 	if data.Summary.TotalProfiles > 0 && usableProfiles == 0 {
 		data.Summary.AllProfilesBlocked = true
 		suggestions = append(suggestions, "All profiles are in cooldown or unhealthy. Consider adding a new profile or waiting for cooldown to expire.")
@@ -1132,19 +1139,23 @@ func runRobotWatch(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
 	// Emit initial status
-	emitWatchStatus(cmd, providerFilter)
+	if err := emitWatchStatus(cmd, providerFilter); err != nil {
+		return nil // Exit gracefully if we can't write output
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			emitWatchStatus(cmd, providerFilter)
+			if err := emitWatchStatus(cmd, providerFilter); err != nil {
+				return nil // Exit gracefully if stdout is closed
+			}
 		}
 	}
 }
 
-func emitWatchStatus(cmd *cobra.Command, providerFilter string) {
+func emitWatchStatus(cmd *cobra.Command, providerFilter string) error {
 	providersToCheck := []string{"codex", "claude", "gemini"}
 	if providerFilter != "" {
 		providersToCheck = []string{providerFilter}
@@ -1165,5 +1176,5 @@ func emitWatchStatus(cmd *cobra.Command, providerFilter string) {
 	}
 
 	enc := json.NewEncoder(cmd.OutOrStdout())
-	enc.Encode(event)
+	return enc.Encode(event)
 }
