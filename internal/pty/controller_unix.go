@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/creack/pty"
 )
@@ -24,9 +25,9 @@ type unixController struct {
 	reader *bufio.Reader
 	opts   *Options
 
-	mu       sync.Mutex
-	started  bool
-	closed   bool
+	mu        sync.Mutex
+	started   bool
+	closed    bool
 	outputBuf []byte
 }
 
@@ -130,35 +131,62 @@ func (c *unixController) ReadOutput() (string, error) {
 	ptmx := c.ptmx
 	c.mu.Unlock()
 
-	// Use a goroutine with timeout to avoid blocking forever
-	type readResult struct {
-		data []byte
-		err  error
+	fd := int(ptmx.Fd())
+	if fd < 0 {
+		return "", fmt.Errorf("invalid pty fd")
 	}
 
-	resultCh := make(chan readResult, 1)
-	go func() {
-		var output []byte
-		buf := make([]byte, 4096)
-		// Only do one read attempt to avoid blocking
-		n, err := ptmx.Read(buf)
-		if n > 0 {
-			output = append(output, buf[:n]...)
-		}
-		resultCh <- readResult{output, err}
-	}()
+	var readfds syscall.FdSet
+	if err := fdSet(fd, &readfds); err != nil {
+		return "", err
+	}
 
-	// Wait up to 100ms for data
-	select {
-	case result := <-resultCh:
-		if result.err != nil && result.err != io.EOF && len(result.data) == 0 {
-			return "", fmt.Errorf("read from pty: %w", result.err)
+	timeout := syscall.Timeval{Sec: 0, Usec: 100000} // 100ms
+	n, err := syscall.Select(fd+1, &readfds, nil, nil, &timeout)
+	if err != nil {
+		if err == syscall.EINTR {
+			return "", nil
 		}
-		return string(result.data), nil
-	case <-time.After(100 * time.Millisecond):
-		// No data available within timeout - return empty (goroutine will eventually complete)
+		return "", fmt.Errorf("select on pty: %w", err)
+	}
+	if n == 0 || !fdIsSet(fd, &readfds) {
 		return "", nil
 	}
+
+	buf := make([]byte, 4096)
+	nread, err := ptmx.Read(buf)
+	if nread > 0 {
+		return string(buf[:nread]), nil
+	}
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("read from pty: %w", err)
+	}
+	return "", nil
+}
+
+func fdSet(fd int, set *syscall.FdSet) error {
+	if fd < 0 {
+		return fmt.Errorf("invalid fd")
+	}
+	bitsPerWord := uint(unsafe.Sizeof(set.Bits[0]) * 8)
+	idx := fd / int(bitsPerWord)
+	if idx >= len(set.Bits) {
+		return fmt.Errorf("fd %d out of range", fd)
+	}
+	set.Bits[idx] |= 1 << (uint(fd) % bitsPerWord)
+	return nil
+}
+
+func fdIsSet(fd int, set *syscall.FdSet) bool {
+	if fd < 0 {
+		return false
+	}
+	bitsPerWord := uint(unsafe.Sizeof(set.Bits[0]) * 8)
+	idx := fd / int(bitsPerWord)
+	if idx >= len(set.Bits) {
+		return false
+	}
+	return set.Bits[idx]&(1<<(uint(fd)%bitsPerWord)) != 0
 }
 
 // ReadLine reads a single line from the PTY output.
