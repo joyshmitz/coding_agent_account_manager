@@ -251,6 +251,7 @@ func TestSyncStatus(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -278,6 +279,7 @@ func TestIsSyncEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -293,6 +295,7 @@ func TestHasMachinesConfigured(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -308,6 +311,7 @@ func TestTriggerSyncIfEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -324,9 +328,13 @@ func TestTriggerSyncIfEnabledWithConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
+
+	originalInterval := GetThrottleInterval()
+	defer SetThrottleInterval(originalInterval)
 
 	config := AutoSyncConfig{
 		ThrottleInterval: 1 * time.Second,
@@ -339,6 +347,10 @@ func TestTriggerSyncIfEnabledWithConfig(t *testing.T) {
 	// This should not panic and should return early (sync disabled)
 	TriggerSyncIfEnabledWithConfig("claude", "test@example.com", config)
 
+	if GetThrottleInterval() != config.ThrottleInterval {
+		t.Errorf("Throttle interval not applied: got %v want %v", GetThrottleInterval(), config.ThrottleInterval)
+	}
+
 	// Give any goroutine time to fail (it shouldn't do anything)
 	time.Sleep(10 * time.Millisecond)
 }
@@ -348,6 +360,7 @@ func TestProcessQueueIfNeeded(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)

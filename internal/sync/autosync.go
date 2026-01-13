@@ -132,6 +132,9 @@ func TriggerSyncIfEnabledWithConfig(provider, profile string, config AutoSyncCon
 		return
 	}
 
+	// Apply throttle interval from config (if set)
+	SetThrottleInterval(config.ThrottleInterval)
+
 	// Check if sync is enabled (both enabled and auto_sync must be true)
 	if state.Pool == nil || !state.Pool.Enabled || !state.Pool.AutoSync {
 		// Sync disabled, do nothing
@@ -177,6 +180,8 @@ func runBackgroundSync(provider, profile string, state *SyncState, config AutoSy
 	results, err := syncer.SyncProfile(ctx, provider, profile)
 	if err != nil {
 		logSyncError("sync profile", err, config.Verbose)
+		// Record throttle even on failure to prevent sync storms
+		globalThrottler.RecordSync(provider, profile)
 		// Queue for retry
 		queueFailedSync(state, provider, profile, err.Error())
 		return
@@ -309,13 +314,23 @@ func processQueue(state *SyncState, config AutoSyncConfig) {
 	// Override syncer's state
 	syncer.state = state
 
+	// Track entries to remove after iteration (modifying slice during range is unsafe)
+	type entryKey struct {
+		provider, profile, machine string
+	}
+	var toRemove []entryKey
+
+	// Take a snapshot of entries to process (in case underlying slice changes)
+	entries := make([]QueueEntry, len(state.Queue.Entries))
+	copy(entries, state.Queue.Entries)
+
 	// Process each queue entry individually with its specific machine
-	for _, entry := range state.Queue.Entries {
+	for _, entry := range entries {
 		// Find the specific machine that failed
 		machine := state.Pool.GetMachine(entry.Machine)
 		if machine == nil {
-			// Machine was removed from pool, remove from queue
-			state.RemoveFromQueue(entry.Provider, entry.Profile, entry.Machine)
+			// Machine was removed from pool, mark for removal
+			toRemove = append(toRemove, entryKey{entry.Provider, entry.Profile, entry.Machine})
 			continue
 		}
 
@@ -327,8 +342,13 @@ func processQueue(state *SyncState, config AutoSyncConfig) {
 		}
 
 		if result.Success {
-			state.RemoveFromQueue(entry.Provider, entry.Profile, entry.Machine)
+			toRemove = append(toRemove, entryKey{entry.Provider, entry.Profile, entry.Machine})
 		}
+	}
+
+	// Remove completed/orphaned entries after iteration
+	for _, key := range toRemove {
+		state.RemoveFromQueue(key.provider, key.profile, key.machine)
 	}
 
 	// Save updated queue

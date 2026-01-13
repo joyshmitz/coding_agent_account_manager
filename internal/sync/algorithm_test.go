@@ -175,10 +175,10 @@ func TestAggregateResults(t *testing.T) {
 			Duration:  10 * time.Millisecond,
 		},
 		{
-			Operation: &SyncOperation{Direction: SyncPull},
-			Success:   true,
+			Operation:     &SyncOperation{Direction: SyncPull},
+			Success:       true,
 			BytesReceived: 200,
-			Duration:  20 * time.Millisecond,
+			Duration:      20 * time.Millisecond,
 		},
 		{
 			Operation: &SyncOperation{Direction: SyncSkip},
@@ -429,6 +429,7 @@ func TestSyncerContextCancellation(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME for sync state
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)

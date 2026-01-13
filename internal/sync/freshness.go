@@ -53,6 +53,11 @@ func CompareFreshness(a, b *TokenFreshness) bool {
 		return true
 	}
 
+	// If either expiry is unknown, fall back to modification time.
+	if a.ExpiresAt.IsZero() || b.ExpiresAt.IsZero() {
+		return a.ModifiedAt.After(b.ModifiedAt)
+	}
+
 	// Primary: later expiry wins
 	if !a.ExpiresAt.Equal(b.ExpiresAt) {
 		return a.ExpiresAt.After(b.ExpiresAt)
@@ -89,26 +94,74 @@ type claudeToken struct {
 	} `json:"oauthToken"`
 }
 
+// claudeCredentials represents the structure of .credentials.json
+type claudeCredentials struct {
+	ClaudeAiOauth *claudeCredentialsOAuth `json:"claudeAiOauth"`
+}
+
+// claudeCredentialsOAuth represents OAuth data inside .credentials.json
+type claudeCredentialsOAuth struct {
+	ExpiresAt float64 `json:"expiresAt"` // Unix milliseconds (or seconds)
+}
+
 // Extract implements FreshnessExtractor for Claude.
 func (e *ClaudeFreshnessExtractor) Extract(provider, profile string, authFiles map[string][]byte) (*TokenFreshness, error) {
-	// Claude tokens are in .claude.json
+	// Claude tokens are in .credentials.json (preferred) or legacy .claude.json
+	var credentialsData []byte
+	var credentialsModTime time.Time
 	var claudeData []byte
 	var modTime time.Time
 
 	for path, data := range authFiles {
-		// Look for .claude.json file
-		if containsPath(path, ".claude.json") {
+		// Look for .credentials.json first (preferred)
+		if credentialsData == nil && containsPath(path, ".credentials.json") {
+			credentialsData = data
+			if info, err := os.Stat(path); err == nil {
+				credentialsModTime = info.ModTime()
+			}
+			continue
+		}
+		// Look for legacy .claude.json file
+		if claudeData == nil && containsPath(path, ".claude.json") {
 			claudeData = data
 			// Try to get mod time from file if it exists
 			if info, err := os.Stat(path); err == nil {
 				modTime = info.ModTime()
 			}
-			break
+		}
+	}
+
+	if credentialsData != nil {
+		expiry, err := parseClaudeCredentialsExpiry(credentialsData)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		if !expiry.IsZero() {
+			return &TokenFreshness{
+				Provider:   provider,
+				Profile:    profile,
+				ExpiresAt:  expiry,
+				ModifiedAt: credentialsModTime,
+				IsExpired:  now.After(expiry),
+				Source:     "local",
+			}, nil
+		}
+		// If credentials do not include expiry but legacy data exists, fall back.
+		if claudeData == nil {
+			return &TokenFreshness{
+				Provider:   provider,
+				Profile:    profile,
+				ExpiresAt:  time.Time{},
+				ModifiedAt: credentialsModTime,
+				IsExpired:  false,
+				Source:     "local",
+			}, nil
 		}
 	}
 
 	if claudeData == nil {
-		return nil, fmt.Errorf("no .claude.json found in auth files")
+		return nil, fmt.Errorf("no .credentials.json or .claude.json found in auth files")
 	}
 
 	var token claudeToken
@@ -116,11 +169,17 @@ func (e *ClaudeFreshnessExtractor) Extract(provider, profile string, authFiles m
 		return nil, fmt.Errorf("parse .claude.json: %w", err)
 	}
 
-	if token.OAuthToken.Expiry.IsZero() {
-		return nil, fmt.Errorf("no expiry in .claude.json")
-	}
-
 	now := time.Now()
+	if token.OAuthToken.Expiry.IsZero() {
+		return &TokenFreshness{
+			Provider:   provider,
+			Profile:    profile,
+			ExpiresAt:  time.Time{},
+			ModifiedAt: modTime,
+			IsExpired:  false,
+			Source:     "local",
+		}, nil
+	}
 	return &TokenFreshness{
 		Provider:   provider,
 		Profile:    profile,
@@ -129,6 +188,31 @@ func (e *ClaudeFreshnessExtractor) Extract(provider, profile string, authFiles m
 		IsExpired:  now.After(token.OAuthToken.Expiry),
 		Source:     "local",
 	}, nil
+}
+
+func parseClaudeCredentialsExpiry(data []byte) (time.Time, error) {
+	var creds claudeCredentials
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return time.Time{}, fmt.Errorf("parse .credentials.json: %w", err)
+	}
+	if creds.ClaudeAiOauth == nil {
+		return time.Time{}, nil
+	}
+	if creds.ClaudeAiOauth.ExpiresAt <= 0 {
+		return time.Time{}, nil
+	}
+	return unixTimeFromMaybeMillis(creds.ClaudeAiOauth.ExpiresAt), nil
+}
+
+func unixTimeFromMaybeMillis(value float64) time.Time {
+	secs := int64(value)
+	if secs <= 0 {
+		return time.Time{}
+	}
+	if secs > 1_000_000_000_000 {
+		return time.UnixMilli(secs)
+	}
+	return time.Unix(secs, 0)
 }
 
 // CodexFreshnessExtractor extracts freshness from Codex auth files.
@@ -169,7 +253,14 @@ func (e *CodexFreshnessExtractor) Extract(provider, profile string, authFiles ma
 	}
 
 	if token.ExpiresAt == 0 {
-		return nil, fmt.Errorf("no expires_at in auth.json")
+		return &TokenFreshness{
+			Provider:   provider,
+			Profile:    profile,
+			ExpiresAt:  time.Time{},
+			ModifiedAt: modTime,
+			IsExpired:  false,
+			Source:     "local",
+		}, nil
 	}
 
 	expiresAt := time.Unix(token.ExpiresAt, 0)
@@ -188,13 +279,18 @@ func (e *CodexFreshnessExtractor) Extract(provider, profile string, authFiles ma
 // GeminiFreshnessExtractor extracts freshness from Gemini auth files.
 type GeminiFreshnessExtractor struct{}
 
-// geminiToken represents the structure of settings.json for Gemini
+// geminiToken represents the structure of settings.json for Gemini.
+// Some versions store tokens at the top level, others under oauth_credentials.
 type geminiToken struct {
-	OAuthCredentials struct {
+	OAuthCredentials *struct {
 		AccessToken  string    `json:"access_token"`
 		RefreshToken string    `json:"refresh_token"`
 		Expiry       time.Time `json:"expiry"`
 	} `json:"oauth_credentials"`
+
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	Expiry       time.Time `json:"expiry"`
 }
 
 // Extract implements FreshnessExtractor for Gemini.
@@ -224,17 +320,31 @@ func (e *GeminiFreshnessExtractor) Extract(provider, profile string, authFiles m
 		return nil, fmt.Errorf("parse settings.json: %w", err)
 	}
 
-	if token.OAuthCredentials.Expiry.IsZero() {
-		return nil, fmt.Errorf("no expiry in settings.json oauth_credentials")
+	expiry := time.Time{}
+	if token.OAuthCredentials != nil {
+		expiry = token.OAuthCredentials.Expiry
+	}
+	if expiry.IsZero() {
+		expiry = token.Expiry
+	}
+	if expiry.IsZero() {
+		return &TokenFreshness{
+			Provider:   provider,
+			Profile:    profile,
+			ExpiresAt:  time.Time{},
+			ModifiedAt: modTime,
+			IsExpired:  false,
+			Source:     "local",
+		}, nil
 	}
 
 	now := time.Now()
 	return &TokenFreshness{
 		Provider:   provider,
 		Profile:    profile,
-		ExpiresAt:  token.OAuthCredentials.Expiry,
+		ExpiresAt:  expiry,
 		ModifiedAt: modTime,
-		IsExpired:  now.After(token.OAuthCredentials.Expiry),
+		IsExpired:  now.After(expiry),
 		Source:     "local",
 	}, nil
 }

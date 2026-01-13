@@ -416,6 +416,7 @@ func TestSyncPoolPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME to redirect data storage
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -455,6 +456,7 @@ func TestLocalIdentity(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME to redirect data storage
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -554,6 +556,94 @@ Host proxy-server
 	}
 	if workLaptop.Source != SourceSSHConfig {
 		t.Errorf("work-laptop source = %q, want %q", workLaptop.Source, SourceSSHConfig)
+	}
+}
+
+func TestSSHConfigParsing_MultiHost(t *testing.T) {
+	sshConfig := `# Test SSH config with multiple hosts on one line
+Host work-laptop work-tower
+    HostName 10.0.0.1
+    Port 22
+    User jeff
+    IdentityFile ~/.ssh/work_key
+`
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+	if err := os.WriteFile(configPath, []byte(sshConfig), 0600); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	machines, err := parseSSHConfig(configPath)
+	if err != nil {
+		t.Fatalf("parseSSHConfig failed: %v", err)
+	}
+
+	if len(machines) != 2 {
+		t.Fatalf("Expected 2 machines, got %d", len(machines))
+	}
+
+	var workLaptop, workTower *Machine
+	for _, m := range machines {
+		switch m.Name {
+		case "work-laptop":
+			workLaptop = m
+		case "work-tower":
+			workTower = m
+		}
+	}
+
+	if workLaptop == nil || workTower == nil {
+		t.Fatalf("Missing expected machines: laptop=%v tower=%v", workLaptop != nil, workTower != nil)
+	}
+
+	for _, m := range []*Machine{workLaptop, workTower} {
+		if m.Address != "10.0.0.1" {
+			t.Errorf("%s address = %q, want %q", m.Name, m.Address, "10.0.0.1")
+		}
+		if m.Port != 22 {
+			t.Errorf("%s port = %d, want 22", m.Name, m.Port)
+		}
+		if m.SSHUser != "jeff" {
+			t.Errorf("%s user = %q, want %q", m.Name, m.SSHUser, "jeff")
+		}
+		if m.Source != SourceSSHConfig {
+			t.Errorf("%s source = %q, want %q", m.Name, m.Source, SourceSSHConfig)
+		}
+	}
+}
+
+func TestSSHConfigParsing_InlineComments(t *testing.T) {
+	sshConfig := `# Test SSH config with inline comments
+Host work-laptop # office machine
+    HostName 192.168.1.100 # private LAN
+    User jeff
+`
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+	if err := os.WriteFile(configPath, []byte(sshConfig), 0600); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	machines, err := parseSSHConfig(configPath)
+	if err != nil {
+		t.Fatalf("parseSSHConfig failed: %v", err)
+	}
+
+	if len(machines) != 1 {
+		t.Fatalf("Expected 1 machine, got %d", len(machines))
+	}
+
+	m := machines[0]
+	if m.Name != "work-laptop" {
+		t.Fatalf("Name = %q, want %q", m.Name, "work-laptop")
+	}
+	if m.Address != "192.168.1.100" {
+		t.Fatalf("Address = %q, want %q", m.Address, "192.168.1.100")
+	}
+	if m.SSHUser != "jeff" {
+		t.Fatalf("SSHUser = %q, want %q", m.SSHUser, "jeff")
 	}
 }
 
@@ -681,6 +771,7 @@ func TestSyncStatePersistence(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set XDG_DATA_HOME to redirect data storage
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -904,6 +995,7 @@ func containsAll(s string, substrs ...string) bool {
 // TestLoadLocalIdentity tests loading identity without creating.
 func TestLoadLocalIdentity(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -938,9 +1030,26 @@ func TestLoadLocalIdentity(t *testing.T) {
 
 // TestSyncDataDir tests SyncDataDir with different env settings.
 func TestSyncDataDir(t *testing.T) {
-	t.Run("with XDG_DATA_HOME", func(t *testing.T) {
+	t.Run("with CAAM_HOME", func(t *testing.T) {
+		oldCaam := os.Getenv("CAAM_HOME")
 		oldXDG := os.Getenv("XDG_DATA_HOME")
+		os.Setenv("CAAM_HOME", "/custom/caam")
 		os.Setenv("XDG_DATA_HOME", "/custom/data")
+		defer os.Setenv("CAAM_HOME", oldCaam)
+		defer os.Setenv("XDG_DATA_HOME", oldXDG)
+
+		dir := SyncDataDir()
+		if dir != "/custom/caam/data/sync" {
+			t.Errorf("SyncDataDir() = %q, want %q", dir, "/custom/caam/data/sync")
+		}
+	})
+
+	t.Run("with XDG_DATA_HOME", func(t *testing.T) {
+		oldCaam := os.Getenv("CAAM_HOME")
+		oldXDG := os.Getenv("XDG_DATA_HOME")
+		os.Unsetenv("CAAM_HOME")
+		os.Setenv("XDG_DATA_HOME", "/custom/data")
+		defer os.Setenv("CAAM_HOME", oldCaam)
 		defer os.Setenv("XDG_DATA_HOME", oldXDG)
 
 		dir := SyncDataDir()
@@ -953,8 +1062,11 @@ func TestSyncDataDir(t *testing.T) {
 	})
 
 	t.Run("without XDG_DATA_HOME", func(t *testing.T) {
+		oldCaam := os.Getenv("CAAM_HOME")
 		oldXDG := os.Getenv("XDG_DATA_HOME")
+		os.Unsetenv("CAAM_HOME")
 		os.Unsetenv("XDG_DATA_HOME")
+		defer os.Setenv("CAAM_HOME", oldCaam)
 		defer os.Setenv("XDG_DATA_HOME", oldXDG)
 
 		dir := SyncDataDir()
@@ -989,35 +1101,36 @@ func TestExpandPath(t *testing.T) {
 	}
 }
 
-// TestToMachineEdgeCases tests edge cases for toMachine.
-func TestToMachineEdgeCases(t *testing.T) {
-	t.Run("empty name", func(t *testing.T) {
-		h := &sshHost{name: ""}
-		if m := h.toMachine(); m != nil {
-			t.Error("toMachine() with empty name should return nil")
+// TestToMachinesEdgeCases tests edge cases for toMachines.
+func TestToMachinesEdgeCases(t *testing.T) {
+	t.Run("empty names", func(t *testing.T) {
+		h := &sshHost{names: nil}
+		if machines := h.toMachines(); len(machines) != 0 {
+			t.Error("toMachines() with empty names should return no machines")
 		}
 	})
 
 	t.Run("hostname is code hosting", func(t *testing.T) {
 		h := &sshHost{
-			name:     "mygh",
+			names:    []string{"mygh"},
 			hostname: "github.com",
 		}
-		if m := h.toMachine(); m != nil {
-			t.Error("toMachine() with github hostname should return nil")
+		if machines := h.toMachines(); len(machines) != 0 {
+			t.Error("toMachines() with github hostname should return no machines")
 		}
 	})
 
 	t.Run("no hostname uses name", func(t *testing.T) {
 		h := &sshHost{
-			name: "my-server",
-			port: "2222",
-			user: "admin",
+			names: []string{"my-server"},
+			port:  "2222",
+			user:  "admin",
 		}
-		m := h.toMachine()
-		if m == nil {
-			t.Fatal("toMachine() should return machine")
+		machines := h.toMachines()
+		if len(machines) != 1 {
+			t.Fatalf("toMachines() len = %d, want 1", len(machines))
 		}
+		m := machines[0]
 		if m.Address != "my-server" {
 			t.Errorf("Address = %q, want %q", m.Address, "my-server")
 		}
@@ -1038,7 +1151,7 @@ func TestMergeDiscoveredMachines(t *testing.T) {
 	}
 
 	discovered := []*Machine{
-		NewMachine("m1", "10.0.0.1"),   // Same name, different address - should be skipped
+		NewMachine("m1", "10.0.0.1"),      // Same name, different address - should be skipped
 		NewMachine("m3", "192.168.1.102"), // New - should be added
 	}
 
@@ -1212,6 +1325,7 @@ func TestSyncPoolLoadInvalidJSON(t *testing.T) {
 // TestSyncPoolLoadSyncPoolError tests LoadSyncPool with error.
 func TestSyncPoolLoadSyncPoolError(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -1230,6 +1344,7 @@ func TestSyncPoolLoadSyncPoolError(t *testing.T) {
 // TestSyncStateLoadInvalidIdentity tests Load with invalid identity file.
 func TestSyncStateLoadInvalidIdentity(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -1839,6 +1954,7 @@ func TestGlobalThrottler(t *testing.T) {
 // TestGetSyncStatus tests GetSyncStatus function.
 func TestGetSyncStatus(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -1880,6 +1996,7 @@ func TestGetSyncStatus(t *testing.T) {
 // TestGetSyncStatusNilPool tests GetSyncStatus with nil pool.
 func TestGetSyncStatusNilPool(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("CAAM_HOME", "")
 	oldXDG := os.Getenv("XDG_DATA_HOME")
 	os.Setenv("XDG_DATA_HOME", tmpDir)
 	defer os.Setenv("XDG_DATA_HOME", oldXDG)
@@ -1918,4 +2035,3 @@ func TestDefaultAutoSyncConfig(t *testing.T) {
 		t.Error("Verbose should default to false")
 	}
 }
-

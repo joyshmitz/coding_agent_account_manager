@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/authfile"
 )
 
 // SyncDirection indicates the direction of a sync operation.
@@ -93,11 +95,8 @@ type SyncerConfig struct {
 
 // DefaultSyncerConfig returns a default configuration.
 func DefaultSyncerConfig() SyncerConfig {
-	homeDir, _ := os.UserHomeDir()
-	vaultPath := filepath.Join(homeDir, ".local", "share", "caam", "vault")
-
 	return SyncerConfig{
-		VaultPath:       vaultPath,
+		VaultPath:       authfile.DefaultVaultPath(),
 		RemoteVaultPath: ".local/share/caam/vault",
 		ConnectOptions:  DefaultConnectOptions(),
 	}

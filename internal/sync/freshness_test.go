@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,6 +68,18 @@ func TestCompareFreshness(t *testing.T) {
 			b:    &TokenFreshness{ExpiresAt: now, ModifiedAt: now},
 			want: false,
 		},
+		{
+			name: "unknown expiry falls back to modtime - a newer",
+			a:    &TokenFreshness{ExpiresAt: time.Time{}, ModifiedAt: later},
+			b:    &TokenFreshness{ExpiresAt: now, ModifiedAt: earlier},
+			want: true,
+		},
+		{
+			name: "unknown expiry falls back to modtime - b newer",
+			a:    &TokenFreshness{ExpiresAt: time.Time{}, ModifiedAt: earlier},
+			b:    &TokenFreshness{ExpiresAt: now, ModifiedAt: later},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -111,6 +124,7 @@ func TestGetExtractor(t *testing.T) {
 // TestClaudeFreshnessExtractor tests Claude token parsing.
 func TestClaudeFreshnessExtractor(t *testing.T) {
 	expiry := time.Date(2025, 12, 20, 14, 29, 0, 0, time.UTC)
+	credentialsExpiry := expiry.Add(2 * time.Hour)
 
 	validClaudeToken := `{
 		"oauthToken": {
@@ -120,6 +134,12 @@ func TestClaudeFreshnessExtractor(t *testing.T) {
 			"expiry": "2025-12-20T14:29:00Z"
 		}
 	}`
+
+	validClaudeCredentials := fmt.Sprintf(`{
+		"claudeAiOauth": {
+			"expiresAt": %d
+		}
+	}`, credentialsExpiry.UnixMilli())
 
 	tests := []struct {
 		name      string
@@ -145,6 +165,31 @@ func TestClaudeFreshnessExtractor(t *testing.T) {
 				}
 				if f.Source != "local" {
 					t.Errorf("Source = %q, want %q", f.Source, "local")
+				}
+			},
+		},
+		{
+			name: "valid credentials token",
+			authFiles: map[string][]byte{
+				".credentials.json": []byte(validClaudeCredentials),
+			},
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.Equal(credentialsExpiry) {
+					t.Errorf("ExpiresAt = %v, want %v", f.ExpiresAt, credentialsExpiry)
+				}
+			},
+		},
+		{
+			name: "credentials preferred over legacy",
+			authFiles: map[string][]byte{
+				".claude.json":      []byte(validClaudeToken),
+				".credentials.json": []byte(validClaudeCredentials),
+			},
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.Equal(credentialsExpiry) {
+					t.Errorf("ExpiresAt = %v, want %v", f.ExpiresAt, credentialsExpiry)
 				}
 			},
 		},
@@ -184,7 +229,12 @@ func TestClaudeFreshnessExtractor(t *testing.T) {
 			authFiles: map[string][]byte{
 				".claude.json": []byte(`{"oauthToken": {"access_token": "test"}}`),
 			},
-			wantErr: true,
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.IsZero() {
+					t.Errorf("ExpiresAt = %v, want zero time", f.ExpiresAt)
+				}
+			},
 		},
 	}
 
@@ -279,14 +329,24 @@ func TestCodexFreshnessExtractor(t *testing.T) {
 			authFiles: map[string][]byte{
 				"auth.json": []byte(`{"access_token": "test"}`),
 			},
-			wantErr: true,
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.IsZero() {
+					t.Errorf("ExpiresAt = %v, want zero time", f.ExpiresAt)
+				}
+			},
 		},
 		{
 			name: "zero expires_at",
 			authFiles: map[string][]byte{
 				"auth.json": []byte(`{"access_token": "test", "expires_at": 0}`),
 			},
-			wantErr: true,
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.IsZero() {
+					t.Errorf("ExpiresAt = %v, want zero time", f.ExpiresAt)
+				}
+			},
 		},
 	}
 
@@ -323,6 +383,11 @@ func TestGeminiFreshnessExtractor(t *testing.T) {
 			"expiry": "2025-12-20T14:29:00Z"
 		}
 	}`
+	validGeminiTokenRoot := `{
+		"access_token": "test-access-token",
+		"refresh_token": "test-refresh-token",
+		"expiry": "2025-12-20T14:29:00Z"
+	}`
 
 	tests := []struct {
 		name      string
@@ -358,6 +423,18 @@ func TestGeminiFreshnessExtractor(t *testing.T) {
 			},
 		},
 		{
+			name: "valid root-level token",
+			authFiles: map[string][]byte{
+				"settings.json": []byte(validGeminiTokenRoot),
+			},
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.Equal(expiry) {
+					t.Errorf("ExpiresAt = %v, want %v", f.ExpiresAt, expiry)
+				}
+			},
+		},
+		{
 			name:      "no auth files",
 			authFiles: map[string][]byte{},
 			wantErr:   true,
@@ -377,18 +454,28 @@ func TestGeminiFreshnessExtractor(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "missing oauth_credentials",
+			name: "missing expiry",
 			authFiles: map[string][]byte{
 				"settings.json": []byte(`{"other_field": true}`),
 			},
-			wantErr: true,
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.IsZero() {
+					t.Errorf("ExpiresAt = %v, want zero time", f.ExpiresAt)
+				}
+			},
 		},
 		{
 			name: "missing expiry in oauth_credentials",
 			authFiles: map[string][]byte{
 				"settings.json": []byte(`{"oauth_credentials": {"access_token": "test"}}`),
 			},
-			wantErr: true,
+			wantErr: false,
+			checkFn: func(t *testing.T, f *TokenFreshness) {
+				if !f.ExpiresAt.IsZero() {
+					t.Errorf("ExpiresAt = %v, want zero time", f.ExpiresAt)
+				}
+			},
 		},
 	}
 
@@ -422,6 +509,11 @@ func TestExtractFreshnessFromBytes(t *testing.T) {
 			"expiry": "2025-12-20T14:29:00Z"
 		}
 	}`
+	validClaudeCredentials := `{
+		"claudeAiOauth": {
+			"expiresAt": 1766245740000
+		}
+	}`
 
 	tests := []struct {
 		name      string
@@ -436,6 +528,15 @@ func TestExtractFreshnessFromBytes(t *testing.T) {
 			profile:  "test",
 			authFiles: map[string][]byte{
 				".claude.json": []byte(validClaudeToken),
+			},
+			wantErr: false,
+		},
+		{
+			name:     "valid claude credentials token",
+			provider: "claude",
+			profile:  "test",
+			authFiles: map[string][]byte{
+				".credentials.json": []byte(validClaudeCredentials),
 			},
 			wantErr: false,
 		},
@@ -481,13 +582,22 @@ func TestExtractFreshnessFromFiles(t *testing.T) {
 
 	// Create test files
 	claudeJSON := filepath.Join(tmpDir, ".claude.json")
+	credentialsJSON := filepath.Join(tmpDir, ".credentials.json")
 	validToken := `{
 		"oauthToken": {
 			"access_token": "test",
 			"expiry": "2025-12-20T14:29:00Z"
 		}
 	}`
+	validCredentials := `{
+		"claudeAiOauth": {
+			"expiresAt": 1766245740000
+		}
+	}`
 	if err := os.WriteFile(claudeJSON, []byte(validToken), 0600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(credentialsJSON, []byte(validCredentials), 0600); err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
@@ -503,6 +613,13 @@ func TestExtractFreshnessFromFiles(t *testing.T) {
 			provider:  "claude",
 			profile:   "test",
 			filePaths: []string{claudeJSON},
+			wantErr:   false,
+		},
+		{
+			name:      "valid credentials file",
+			provider:  "claude",
+			profile:   "test",
+			filePaths: []string{credentialsJSON},
 			wantErr:   false,
 		},
 		{
@@ -558,6 +675,8 @@ func TestContainsPath(t *testing.T) {
 		// Positive cases - exact filename match
 		{".claude.json", ".claude.json", true},
 		{"/home/user/.claude.json", ".claude.json", true},
+		{".credentials.json", ".credentials.json", true},
+		{"/home/user/.credentials.json", ".credentials.json", true},
 		{"auth.json", "auth.json", true},
 		{"/path/to/auth.json", "auth.json", true},
 		{"settings.json", "settings.json", true},
@@ -567,14 +686,15 @@ func TestContainsPath(t *testing.T) {
 		{".claude.json", "auth.json", false},
 		{"auth.json", ".claude.json", false},
 		{"", ".claude.json", false},
-		{".claude.json", "", false},       // Empty filename should not match
+		{".claude.json", "", false}, // Empty filename should not match
 		{"short", "longfilename", false},
 
 		// False positive prevention - these should NOT match
-		{"/path/to/auth.json.backup", "auth.json", false},  // Backup file
-		{"/path/to/auth.json.tmp", "auth.json", false},     // Temp file
-		{"/path/to/not.claude.json", ".claude.json", false}, // Different prefix
-		{"/path/to/.claude.json.bak", ".claude.json", false}, // Backup suffix
+		{"/path/to/auth.json.backup", "auth.json", false},              // Backup file
+		{"/path/to/auth.json.tmp", "auth.json", false},                 // Temp file
+		{"/path/to/not.claude.json", ".claude.json", false},            // Different prefix
+		{"/path/to/.claude.json.bak", ".claude.json", false},           // Backup suffix
+		{"/path/to/.credentials.json.bak", ".credentials.json", false}, // Backup suffix
 	}
 
 	for _, tt := range tests {

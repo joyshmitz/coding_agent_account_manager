@@ -26,8 +26,11 @@ type LocalIdentity struct {
 const identityFileName = "identity.json"
 
 // SyncDataDir returns the path to the sync data directory.
-// Uses XDG_DATA_HOME if set, otherwise ~/.local/share/caam/sync.
+// Uses CAAM_HOME/data if set, otherwise XDG_DATA_HOME/caam/sync.
 func SyncDataDir() string {
+	if caamHome := os.Getenv("CAAM_HOME"); caamHome != "" {
+		return filepath.Join(caamHome, "data", "sync")
+	}
 	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
 		return filepath.Join(xdgData, "caam", "sync")
 	}

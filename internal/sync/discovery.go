@@ -57,6 +57,11 @@ func parseSSHConfig(path string) ([]*Machine, error) {
 			continue
 		}
 
+		line = stripInlineComment(line)
+		if line == "" {
+			continue
+		}
+
 		// Parse key-value pairs
 		parts := strings.SplitN(line, " ", 2)
 		if len(parts) < 2 {
@@ -74,28 +79,33 @@ func parseSSHConfig(path string) ([]*Machine, error) {
 		case "host":
 			// Save previous host if valid
 			if current != nil && !currentHasProxyJump {
-				if m := current.toMachine(); m != nil {
-					machines = append(machines, m)
+				machines = append(machines, current.toMachines()...)
+			}
+
+			// Start new host. SSH allows multiple host patterns per line.
+			// We only keep explicit, non-wildcard, non-negated hosts.
+			rawHosts := strings.Fields(value)
+			allowed := make([]string, 0, len(rawHosts))
+			for _, host := range rawHosts {
+				if strings.HasPrefix(host, "!") {
+					continue
 				}
+				if strings.Contains(host, "*") || strings.Contains(host, "?") {
+					continue
+				}
+				if skipHosts[strings.ToLower(host)] {
+					continue
+				}
+				allowed = append(allowed, host)
 			}
-
-			// Start new host
-			// Skip wildcards
-			if strings.Contains(value, "*") || strings.Contains(value, "?") {
-				current = nil
-				currentHasProxyJump = false
-				continue
-			}
-
-			// Skip known hosts
-			if skipHosts[strings.ToLower(value)] {
+			if len(allowed) == 0 {
 				current = nil
 				currentHasProxyJump = false
 				continue
 			}
 
 			current = &sshHost{
-				name: value,
+				names: allowed,
 			}
 			currentHasProxyJump = false
 
@@ -127,9 +137,7 @@ func parseSSHConfig(path string) ([]*Machine, error) {
 
 	// Save last host
 	if current != nil && !currentHasProxyJump {
-		if m := current.toMachine(); m != nil {
-			machines = append(machines, m)
-		}
+		machines = append(machines, current.toMachines()...)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -141,53 +149,65 @@ func parseSSHConfig(path string) ([]*Machine, error) {
 
 // sshHost is an intermediate representation of an SSH config host.
 type sshHost struct {
-	name         string
+	names        []string
 	hostname     string
 	port         string
 	user         string
 	identityFile string
 }
 
-// toMachine converts an SSH host to a Machine.
+// toMachines converts an SSH host block to Machines.
 // Returns nil if the host should be skipped.
-func (h *sshHost) toMachine() *Machine {
-	if h.name == "" {
+func (h *sshHost) toMachines() []*Machine {
+	if h == nil || len(h.names) == 0 {
 		return nil
 	}
 
-	// Determine address
-	address := h.hostname
-	if address == "" {
-		address = h.name
-	}
-
-	// Skip if the hostname is a known service
-	if skipHosts[strings.ToLower(address)] {
-		return nil
-	}
-
-	m := NewMachine(h.name, address)
-	m.Source = SourceSSHConfig
-
-	// Parse port
-	if h.port != "" {
-		host, port, _ := ParseAddress(":" + h.port)
-		if host == "" && port != 0 {
-			m.Port = port
+	machines := make([]*Machine, 0, len(h.names))
+	for _, name := range h.names {
+		if name == "" {
+			continue
 		}
+
+		// Determine address
+		address := h.hostname
+		if address == "" {
+			address = name
+		}
+
+		// Skip if the hostname is a known service
+		if skipHosts[strings.ToLower(address)] {
+			continue
+		}
+
+		m := NewMachine(name, address)
+		m.Source = SourceSSHConfig
+
+		// Parse port
+		if h.port != "" {
+			host, port, _ := ParseAddress(":" + h.port)
+			if host == "" && port != 0 {
+				m.Port = port
+			}
+		}
+
+		// Set user
+		if h.user != "" {
+			m.SSHUser = h.user
+		}
+
+		// Set identity file
+		if h.identityFile != "" {
+			m.SSHKeyPath = expandPath(h.identityFile)
+		}
+
+		machines = append(machines, m)
 	}
 
-	// Set user
-	if h.user != "" {
-		m.SSHUser = h.user
+	if len(machines) == 0 {
+		return nil
 	}
-
-	// Set identity file
-	if h.identityFile != "" {
-		m.SSHKeyPath = expandPath(h.identityFile)
-	}
-
-	return m
+	return machines
 }
 
 // expandPath expands ~ to the user's home directory.
@@ -198,6 +218,28 @@ func expandPath(path string) string {
 		}
 	}
 	return path
+}
+
+func stripInlineComment(line string) string {
+	if line == "" {
+		return line
+	}
+
+	// Treat '#' as a comment delimiter when preceded by whitespace
+	// (common in SSH configs: "Host foo # comment").
+	prevWhitespace := true
+	for i, r := range line {
+		if r == '#' && prevWhitespace {
+			return strings.TrimSpace(line[:i])
+		}
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			prevWhitespace = true
+		} else {
+			prevWhitespace = false
+		}
+	}
+
+	return strings.TrimSpace(line)
 }
 
 // MergeDiscoveredMachines merges newly discovered machines with existing ones.
