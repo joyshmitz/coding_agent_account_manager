@@ -1,15 +1,4 @@
-I'm drowning in Claude Max accounts and wasting too much time swapping them when they run out of usage in the middle of a session. 
-
-I made a tool called caam (Dicklesworthstone/coding_agent_account_manager) to help with this but was too busy to really monitor the development process closely and it never really solved the main problem I have to deal with, so I just kept putting off using it. 
-
-Not actively dogfooding your software is a recipe for it being useless and bad (I know ntm suffers from this too and I'm sorry, I'm going to improve it soon!)
-
-Finally, I hit my breaking point last night and took considerable time and energy to very carefully document the actual issues I'm facing and what precisely needs to be done and outlined some ways to deal with it.
-
-It's one of the longer prompts I've written manually recently, so I thought I'd share it. Below my prompt are the various responses from Claude Code and plans. I'm hopeful I will finally get this all wrapped up today and stop wasting so much time doing auth flows and copying and pasting tokens from the browser into the terminal.
-
-
----
+# Making CAAM Not Useless - Prompt Edition
 
 Ok, this application (caam) is still quite useless to my workflows despite all its existing features. For one thing, instead of manually always having to add accounts, it would be nice to have an active "watcher" mode and then as I naturally log into different accounts for Claude Code, Codex, or Gemini in the normal course (which causes the contents of the auth files stored in places like `~/.codex` to change in telltale ways), `caam` (this app) should automatically be able to pick up on that and add the account automatically in all its details with the right name and everything. That's one big thing.
 
