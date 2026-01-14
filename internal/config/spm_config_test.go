@@ -253,6 +253,81 @@ project:
 	}
 }
 
+func TestLoadSPMConfigEnvOverrides(t *testing.T) {
+	origCaamHome, hadCaamHome := os.LookupEnv("CAAM_HOME")
+	origRefresh, hadRefresh := os.LookupEnv("CAAM_HEALTH_REFRESH_THRESHOLD")
+	defer func() {
+		if hadCaamHome {
+			_ = os.Setenv("CAAM_HOME", origCaamHome)
+		} else {
+			_ = os.Unsetenv("CAAM_HOME")
+		}
+		if hadRefresh {
+			_ = os.Setenv("CAAM_HEALTH_REFRESH_THRESHOLD", origRefresh)
+		} else {
+			_ = os.Unsetenv("CAAM_HEALTH_REFRESH_THRESHOLD")
+		}
+	}()
+
+	tmpDir := t.TempDir()
+	if err := os.Setenv("CAAM_HOME", tmpDir); err != nil {
+		t.Fatalf("Setenv(CAAM_HOME) error = %v", err)
+	}
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0600); err != nil {
+		t.Fatalf("WriteFile(config.yaml) error = %v", err)
+	}
+
+	if err := os.Setenv("CAAM_HEALTH_REFRESH_THRESHOLD", "15m"); err != nil {
+		t.Fatalf("Setenv(CAAM_HEALTH_REFRESH_THRESHOLD) error = %v", err)
+	}
+
+	cfg, err := LoadSPMConfig()
+	if err != nil {
+		t.Fatalf("LoadSPMConfig() error = %v", err)
+	}
+
+	if cfg.Health.RefreshThreshold.Duration() != 15*time.Minute {
+		t.Errorf("RefreshThreshold = %v, want 15m", cfg.Health.RefreshThreshold)
+	}
+}
+
+func TestLoadSPMConfigEnvOverridesInvalid(t *testing.T) {
+	origCaamHome, hadCaamHome := os.LookupEnv("CAAM_HOME")
+	origRefresh, hadRefresh := os.LookupEnv("CAAM_HEALTH_REFRESH_THRESHOLD")
+	defer func() {
+		if hadCaamHome {
+			_ = os.Setenv("CAAM_HOME", origCaamHome)
+		} else {
+			_ = os.Unsetenv("CAAM_HOME")
+		}
+		if hadRefresh {
+			_ = os.Setenv("CAAM_HEALTH_REFRESH_THRESHOLD", origRefresh)
+		} else {
+			_ = os.Unsetenv("CAAM_HEALTH_REFRESH_THRESHOLD")
+		}
+	}()
+
+	tmpDir := t.TempDir()
+	if err := os.Setenv("CAAM_HOME", tmpDir); err != nil {
+		t.Fatalf("Setenv(CAAM_HOME) error = %v", err)
+	}
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0600); err != nil {
+		t.Fatalf("WriteFile(config.yaml) error = %v", err)
+	}
+
+	if err := os.Setenv("CAAM_HEALTH_REFRESH_THRESHOLD", "-5m"); err != nil {
+		t.Fatalf("Setenv(CAAM_HEALTH_REFRESH_THRESHOLD) error = %v", err)
+	}
+
+	if _, err := LoadSPMConfig(); err == nil {
+		t.Fatalf("LoadSPMConfig() expected error for invalid env override")
+	}
+}
+
 func TestLoadSPMConfigInvalidYAML(t *testing.T) {
 	// Save original env
 	origCaamHome := os.Getenv("CAAM_HOME")

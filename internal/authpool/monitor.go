@@ -176,13 +176,13 @@ func (m *Monitor) checkAndRefresh(ctx context.Context) {
 			profile.Status == PoolStatusError
 
 		if needsRefresh {
-			m.triggerRefresh(ctx, profile.Provider, profile.ProfileName)
+			m.triggerRefresh(ctx, profile.Provider, profile.ProfileName, profile.Status)
 		}
 	}
 }
 
 // triggerRefresh starts a refresh operation for a profile.
-func (m *Monitor) triggerRefresh(ctx context.Context, provider, profile string) {
+func (m *Monitor) triggerRefresh(ctx context.Context, provider, profile string, prevStatus PoolStatus) {
 	// Try to acquire semaphore (non-blocking)
 	select {
 	case m.semaphore <- struct{}{}:
@@ -205,6 +205,10 @@ func (m *Monitor) triggerRefresh(ctx context.Context, provider, profile string) 
 	m.mu.Lock()
 	if m.stopping {
 		m.mu.Unlock()
+		// Revert the optimistic status change so the pool doesn't stay stuck.
+		if prevStatus != PoolStatusRefreshing {
+			_ = m.pool.SetStatus(provider, profile, prevStatus)
+		}
 		<-m.semaphore
 		return
 	}

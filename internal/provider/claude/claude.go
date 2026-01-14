@@ -198,7 +198,7 @@ echo "Error: No API key found" >&2
 exit 1
 `
 
-	if err := os.WriteFile(helperPath, []byte(helperScript), 0700); err != nil {
+	if err := atomicWriteFile(helperPath, []byte(helperScript), 0700); err != nil {
 		return fmt.Errorf("write helper script: %w", err)
 	}
 
@@ -212,7 +212,7 @@ exit 1
 		return fmt.Errorf("marshal settings: %w", err)
 	}
 
-	if err := os.WriteFile(settingsPath, data, 0600); err != nil {
+	if err := atomicWriteFile(settingsPath, data, 0600); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 
@@ -614,6 +614,46 @@ func (p *Provider) ImportAuth(ctx context.Context, sourcePath string, prof *prof
 	}
 
 	return copiedFiles, nil
+}
+
+// atomicWriteFile writes data to a file atomically using temp file + fsync + rename.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up on error; no-op after successful rename
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 // copyFile copies a file from src to dst with fsync for durability.

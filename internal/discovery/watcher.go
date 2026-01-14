@@ -373,7 +373,10 @@ func (w *Watcher) extractIdentity(provider, path string) (*identity.Identity, er
 			return identity.ExtractFromClaudeCredentials(path)
 		}
 		// Also check the primary location if this isn't it
-		homeDir, _ := os.UserHomeDir()
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("get home dir: %w", err)
+		}
 		credPath := filepath.Join(homeDir, ".claude", ".credentials.json")
 		if _, err := os.Stat(credPath); err == nil {
 			return identity.ExtractFromClaudeCredentials(credPath)
@@ -387,7 +390,10 @@ func (w *Watcher) extractIdentity(provider, path string) (*identity.Identity, er
 		// Check default location
 		codexHome := os.Getenv("CODEX_HOME")
 		if codexHome == "" {
-			homeDir, _ := os.UserHomeDir()
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("get home dir: %w", err)
+			}
 			codexHome = filepath.Join(homeDir, ".codex")
 		}
 		authPath := filepath.Join(codexHome, "auth.json")
@@ -403,7 +409,10 @@ func (w *Watcher) extractIdentity(provider, path string) (*identity.Identity, er
 		// Check default location
 		geminiHome := os.Getenv("GEMINI_HOME")
 		if geminiHome == "" {
-			homeDir, _ := os.UserHomeDir()
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("get home dir: %w", err)
+			}
 			geminiHome = filepath.Join(homeDir, ".gemini")
 		}
 		settingsPath := filepath.Join(geminiHome, "settings.json")
@@ -445,14 +454,27 @@ func WatchOnce(vault *authfile.Vault, providers []string, logger *slog.Logger) (
 		var ident *identity.Identity
 		var err error
 
-		homeDir, _ := os.UserHomeDir()
 		switch provider {
 		case "claude":
+			homeDir, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				logger.Debug("failed to get home dir",
+					"provider", provider,
+					"error", homeErr)
+				continue
+			}
 			credPath := filepath.Join(homeDir, ".claude", ".credentials.json")
 			ident, err = identity.ExtractFromClaudeCredentials(credPath)
 		case "codex":
 			codexHome := os.Getenv("CODEX_HOME")
 			if codexHome == "" {
+				homeDir, homeErr := os.UserHomeDir()
+				if homeErr != nil {
+					logger.Debug("failed to get home dir",
+						"provider", provider,
+						"error", homeErr)
+					continue
+				}
 				codexHome = filepath.Join(homeDir, ".codex")
 			}
 			authPath := filepath.Join(codexHome, "auth.json")
@@ -460,6 +482,13 @@ func WatchOnce(vault *authfile.Vault, providers []string, logger *slog.Logger) (
 		case "gemini":
 			geminiHome := os.Getenv("GEMINI_HOME")
 			if geminiHome == "" {
+				homeDir, homeErr := os.UserHomeDir()
+				if homeErr != nil {
+					logger.Debug("failed to get home dir",
+						"provider", provider,
+						"error", homeErr)
+					continue
+				}
 				geminiHome = filepath.Join(homeDir, ".gemini")
 			}
 			settingsPath := filepath.Join(geminiHome, "settings.json")

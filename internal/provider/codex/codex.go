@@ -99,7 +99,7 @@ func EnsureFileCredentialStore(home string) error {
 			return fmt.Errorf("create codex home: %w", err)
 		}
 		content := "# Managed by caam to ensure file-based auth storage\n" + settingLine + "\n"
-		return os.WriteFile(configPath, []byte(content), 0600)
+		return atomicWriteFile(configPath, []byte(content), 0600)
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -112,7 +112,7 @@ func EnsureFileCredentialStore(home string) error {
 			return nil
 		}
 		updated := codexCredentialsStoreRe.ReplaceAll(data, []byte(settingLine))
-		return os.WriteFile(configPath, updated, 0600)
+		return atomicWriteFile(configPath, updated, 0600)
 	}
 
 	text := string(data)
@@ -120,7 +120,7 @@ func EnsureFileCredentialStore(home string) error {
 		text += "\n"
 	}
 	text += settingLine + "\n"
-	return os.WriteFile(configPath, []byte(text), 0600)
+	return atomicWriteFile(configPath, []byte(text), 0600)
 }
 
 // AuthFiles returns the auth file specifications for Codex.
@@ -508,6 +508,46 @@ func (p *Provider) ImportAuth(ctx context.Context, sourcePath string, prof *prof
 	copiedFiles = append(copiedFiles, targetPath)
 
 	return copiedFiles, nil
+}
+
+// atomicWriteFile writes data to a file atomically using temp file + fsync + rename.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up on error; no-op after successful rename
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 // copyFile copies a file from src to dst with fsync for durability.

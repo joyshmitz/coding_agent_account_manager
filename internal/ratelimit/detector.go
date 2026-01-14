@@ -175,6 +175,7 @@ func (d *Detector) Provider() Provider {
 
 // ObservingWriter wraps a writer and checks each write for rate limit patterns.
 type ObservingWriter struct {
+	mu       sync.Mutex
 	detector *Detector
 	callback func(line string) // Optional callback for each line
 	buffer   []byte
@@ -190,6 +191,9 @@ func NewObservingWriter(detector *Detector, callback func(line string)) *Observi
 
 // Write implements io.Writer, buffering and checking each line.
 func (w *ObservingWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	n = len(p)
 
 	// Append to buffer
@@ -219,6 +223,9 @@ func (w *ObservingWriter) Write(p []byte) (n int, err error) {
 
 // Flush processes any remaining buffered data.
 func (w *ObservingWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if len(w.buffer) > 0 {
 		line := string(w.buffer)
 		w.detector.Check(line)

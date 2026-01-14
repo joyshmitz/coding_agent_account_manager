@@ -36,5 +36,8 @@ func AppendLogLine(path, line string) error {
 	if _, err := fmt.Fprintf(f, "%s %s\n", ts, line); err != nil {
 		return fmt.Errorf("write log line: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync log file: %w", err)
+	}
 	return nil
 }

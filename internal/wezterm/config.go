@@ -163,7 +163,10 @@ func extractIdentityFile(entry string) string {
 	match := homePattern.FindStringSubmatch(entry)
 	if match != nil {
 		// Expand home_dir
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "" // Cannot expand home_dir
+		}
 		return filepath.Join(home, match[1])
 	}
 
@@ -174,7 +177,10 @@ func extractIdentityFile(entry string) string {
 		path := match[1]
 		// Expand ~ if present
 		if strings.HasPrefix(path, "~/") {
-			home, _ := os.UserHomeDir()
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "" // Cannot expand ~
+			}
 			path = filepath.Join(home, path[2:])
 		}
 		return path

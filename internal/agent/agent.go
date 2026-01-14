@@ -453,8 +453,37 @@ func (a *Agent) saveUsage() {
 	}
 
 	dir := filepath.Dir(a.usagePath)
-	os.MkdirAll(dir, 0700)
-	os.WriteFile(a.usagePath, data, 0600)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		a.logger.Warn("failed to create usage dir", "error", err)
+		return
+	}
+
+	// Atomic write: temp file + fsync + rename
+	tmpFile, err := os.CreateTemp(dir, "account_usage.*.tmp")
+	if err != nil {
+		a.logger.Warn("failed to create temp usage file", "error", err)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up on error; no-op after successful rename
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return
+	}
+
+	if err := os.Rename(tmpPath, a.usagePath); err != nil {
+		a.logger.Warn("failed to rename usage file", "error", err)
+	}
 }
 
 func (a *Agent) withLogging(next http.Handler) http.Handler {

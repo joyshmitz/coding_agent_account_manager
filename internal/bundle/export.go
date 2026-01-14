@@ -617,8 +617,8 @@ func (e *VaultExporter) encryptBundle(zipPath, password, outputPath string) (str
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 
-	// Write encrypted file
-	if err := os.WriteFile(outputPath, ciphertext, 0600); err != nil {
+	// Write encrypted file atomically
+	if err := atomicWriteBytes(outputPath, ciphertext, 0600); err != nil {
 		return "", fmt.Errorf("write encrypted bundle: %w", err)
 	}
 
@@ -629,12 +629,48 @@ func (e *VaultExporter) encryptBundle(zipPath, password, outputPath string) (str
 		os.Remove(outputPath)
 		return "", fmt.Errorf("marshal metadata: %w", err)
 	}
-	if err := os.WriteFile(metaPath, metaData, 0600); err != nil {
+	if err := atomicWriteBytes(metaPath, metaData, 0600); err != nil {
 		os.Remove(outputPath)
 		return "", fmt.Errorf("write metadata: %w", err)
 	}
 
 	return outputPath, nil
+}
+
+// atomicWriteBytes writes data to a file atomically using temp file + fsync + rename.
+func atomicWriteBytes(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up on error; no-op after successful rename
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 // createZipFromDir creates a zip archive from a directory.

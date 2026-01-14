@@ -622,7 +622,7 @@ func expandPath(path string) string {
 	return path
 }
 
-// CopyFile copies a file using io for larger files.
+// CopyFile copies a file using io for larger files with atomic write pattern.
 func CopyFile(dst, src string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -630,15 +630,32 @@ func CopyFile(dst, src string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	// Use atomic write pattern: write to temp file, sync, then rename
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	out, err := os.CreateTemp(dir, filepath.Base(dst)+".tmp.*")
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	tmpPath := out.Name()
+	defer os.Remove(tmpPath) // Clean up on error; no-op after successful rename
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
 		return err
 	}
 
-	return out.Sync()
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+
+	if err := out.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, dst)
 }

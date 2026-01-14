@@ -223,9 +223,9 @@ func (p *Provider) loginWithAPIKey(ctx context.Context, prof *profile.Profile) e
 	fmt.Scanln(&apiKey)
 
 	if apiKey != "" {
-		// Write to .gemini/.env
+		// Write to .gemini/.env atomically
 		content := fmt.Sprintf("GEMINI_API_KEY=%s\n", apiKey)
-		if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
+		if err := atomicWriteFile(envPath, []byte(content), 0600); err != nil {
 			return fmt.Errorf("write .env: %w", err)
 		}
 		fmt.Printf("API key saved to %s\n", envPath)
@@ -681,6 +681,46 @@ func copyFile(src, dst string) error {
 
 	// Atomic rename
 	return os.Rename(tmpPath, dst)
+}
+
+// atomicWriteFile writes data to a file atomically using temp file + fsync + rename.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up on error; no-op after successful rename
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 // ValidateToken validates that the authentication token works.

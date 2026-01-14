@@ -68,7 +68,10 @@ var RefreshGeminiToken = func(ctx context.Context, clientID, clientSecret, refre
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("gemini refresh error %d (failed to read body: %v)", resp.StatusCode, err)
+		}
 		return nil, fmt.Errorf("gemini refresh error %d: %s", resp.StatusCode, string(body))
 	}
 

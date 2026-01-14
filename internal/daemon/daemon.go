@@ -136,6 +136,12 @@ func New(vault *authfile.Vault, healthStore *health.Storage, cfg *Config) *Daemo
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
+	if cfg.CheckInterval <= 0 {
+		cfg.CheckInterval = DefaultCheckInterval
+	}
+	if cfg.RefreshThreshold <= 0 {
+		cfg.RefreshThreshold = DefaultRefreshThreshold
+	}
 
 	logger := log.New(os.Stdout, "[caam-daemon] ", log.LstdFlags)
 	var logFile *os.File
@@ -313,7 +319,13 @@ func (d *Daemon) ReloadConfig() {
 	d.configMu.Lock()
 	d.config.Verbose = globalCfg.Daemon.Verbose
 	d.config.CheckInterval = globalCfg.Daemon.CheckInterval.Duration()
+	if d.config.CheckInterval <= 0 {
+		d.config.CheckInterval = DefaultCheckInterval
+	}
 	d.config.RefreshThreshold = globalCfg.Daemon.RefreshThreshold.Duration()
+	if d.config.RefreshThreshold <= 0 {
+		d.config.RefreshThreshold = DefaultRefreshThreshold
+	}
 	d.configMu.Unlock()
 
 	d.logger.Println("Config reloaded (runtime settings applied)")
@@ -444,6 +456,9 @@ func (d *Daemon) runLoop() {
 	d.checkAndBackup()
 
 	interval := d.getCheckInterval()
+	if interval <= 0 {
+		interval = DefaultCheckInterval
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -454,6 +469,9 @@ func (d *Daemon) runLoop() {
 			return
 		case <-d.configChanged:
 			newInterval := d.getCheckInterval()
+			if newInterval <= 0 {
+				newInterval = DefaultCheckInterval
+			}
 			if newInterval != interval {
 				interval = newInterval
 				ticker.Reset(interval)

@@ -402,11 +402,11 @@ func LoadSPMConfig() (*SPMConfig, error) {
 		return nil, fmt.Errorf("parse SPM config: %w", err)
 	}
 
+	config.ApplyEnvOverrides()
+
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid SPM config: %w", err)
 	}
-
-	config.ApplyEnvOverrides()
 
 	return config, nil
 }
