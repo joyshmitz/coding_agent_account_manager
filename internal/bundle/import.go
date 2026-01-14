@@ -727,8 +727,14 @@ func copyFile(src, dst string) error {
 func (i *VaultImporter) importOptionalFiles(bundleDir string, manifest *ManifestV1, opts *ImportOptions, result *ImportResult) {
 	// Config
 	if manifest.Contents.Config.Included && !opts.SkipConfig && opts.ConfigPath != "" {
-		srcPath := filepath.Join(bundleDir, manifest.Contents.Config.Path)
-		if err := copyFile(srcPath, opts.ConfigPath); err != nil {
+		srcPath, err := ValidateManifestPath(bundleDir, manifest.Contents.Config.Path)
+		if err != nil {
+			result.OptionalActions = append(result.OptionalActions, OptionalAction{
+				Name:   "config",
+				Action: "error",
+				Reason: fmt.Sprintf("invalid path: %v", err),
+			})
+		} else if err := copyFile(srcPath, opts.ConfigPath); err != nil {
 			result.OptionalActions = append(result.OptionalActions, OptionalAction{
 				Name:   "config",
 				Action: "error",
@@ -745,8 +751,14 @@ func (i *VaultImporter) importOptionalFiles(bundleDir string, manifest *Manifest
 
 	// Projects (merge)
 	if manifest.Contents.Projects.Included && !opts.SkipProjects && opts.ProjectsPath != "" {
-		srcPath := filepath.Join(bundleDir, manifest.Contents.Projects.Path)
-		if err := mergeJSONFile(srcPath, opts.ProjectsPath); err != nil {
+		srcPath, err := ValidateManifestPath(bundleDir, manifest.Contents.Projects.Path)
+		if err != nil {
+			result.OptionalActions = append(result.OptionalActions, OptionalAction{
+				Name:   "projects",
+				Action: "error",
+				Reason: fmt.Sprintf("invalid path: %v", err),
+			})
+		} else if err := mergeJSONFile(srcPath, opts.ProjectsPath); err != nil {
 			result.OptionalActions = append(result.OptionalActions, OptionalAction{
 				Name:   "projects",
 				Action: "error",
@@ -763,9 +775,14 @@ func (i *VaultImporter) importOptionalFiles(bundleDir string, manifest *Manifest
 
 	// Health
 	if manifest.Contents.Health.Included && !opts.SkipHealth && opts.HealthPath != "" {
-		srcPath := filepath.Join(bundleDir, manifest.Contents.Health.Path)
-		info, err := os.Stat(srcPath)
+		srcPath, err := ValidateManifestPath(bundleDir, manifest.Contents.Health.Path)
 		if err != nil {
+			result.OptionalActions = append(result.OptionalActions, OptionalAction{
+				Name:   "health",
+				Action: "error",
+				Reason: fmt.Sprintf("invalid path: %v", err),
+			})
+		} else if info, err := os.Stat(srcPath); err != nil {
 			result.OptionalActions = append(result.OptionalActions, OptionalAction{
 				Name:   "health",
 				Action: "error",
@@ -824,8 +841,14 @@ func (i *VaultImporter) importOptionalFiles(bundleDir string, manifest *Manifest
 
 	// Database
 	if manifest.Contents.Database.Included && !opts.SkipDatabase && opts.DatabasePath != "" {
-		srcPath := filepath.Join(bundleDir, manifest.Contents.Database.Path)
-		if err := copyFile(srcPath, opts.DatabasePath); err != nil {
+		srcPath, err := ValidateManifestPath(bundleDir, manifest.Contents.Database.Path)
+		if err != nil {
+			result.OptionalActions = append(result.OptionalActions, OptionalAction{
+				Name:   "database",
+				Action: "error",
+				Reason: fmt.Sprintf("invalid path: %v", err),
+			})
+		} else if err := copyFile(srcPath, opts.DatabasePath); err != nil {
 			result.OptionalActions = append(result.OptionalActions, OptionalAction{
 				Name:   "database",
 				Action: "error",
@@ -842,8 +865,14 @@ func (i *VaultImporter) importOptionalFiles(bundleDir string, manifest *Manifest
 
 	// Sync config (merge)
 	if manifest.Contents.SyncConfig.Included && !opts.SkipSync && opts.SyncPath != "" {
-		srcPath := filepath.Join(bundleDir, manifest.Contents.SyncConfig.Path)
-		if err := copyDirectory(srcPath, opts.SyncPath); err != nil {
+		srcPath, err := ValidateManifestPath(bundleDir, manifest.Contents.SyncConfig.Path)
+		if err != nil {
+			result.OptionalActions = append(result.OptionalActions, OptionalAction{
+				Name:   "sync",
+				Action: "error",
+				Reason: fmt.Sprintf("invalid path: %v", err),
+			})
+		} else if err := copyDirectory(srcPath, opts.SyncPath); err != nil {
 			result.OptionalActions = append(result.OptionalActions, OptionalAction{
 				Name:   "sync",
 				Action: "error",

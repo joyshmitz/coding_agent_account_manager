@@ -9,6 +9,7 @@ package health
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -109,8 +110,11 @@ func (s *Storage) loadLocked() (*HealthStore, error) {
 
 	store := newHealthStore()
 	if err := json.Unmarshal(data, store); err != nil {
-		// Return empty store on parse error rather than failing
-		// This handles corrupted files gracefully
+		// Log warning about corrupted file but continue with empty store
+		// to allow recovery. The corrupted file will be overwritten on next save.
+		slog.Warn("health file corrupted, starting fresh",
+			"path", s.path,
+			"error", err)
 		return newHealthStore(), nil
 	}
 

@@ -222,6 +222,12 @@ func (p *Profile) Lock() error {
 		return fmt.Errorf("write lock file: %w", err)
 	}
 
+	// Sync to disk to ensure durability before releasing file
+	if err := f.Sync(); err != nil {
+		os.Remove(lockPath)
+		return fmt.Errorf("sync lock file: %w", err)
+	}
+
 	return nil
 }
 

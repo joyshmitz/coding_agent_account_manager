@@ -293,8 +293,10 @@ func (d *Daemon) Start() error {
 				continue
 			}
 			d.logger.Printf("Received signal %v, shutting down...", sig)
+			signal.Stop(sigCh) // Clean up signal handler before stopping
 			return d.Stop()
 		case <-d.ctx.Done():
+			signal.Stop(sigCh) // Clean up signal handler before stopping
 			return d.Stop()
 		}
 	}
@@ -446,11 +448,13 @@ func (d *Daemon) GetPoolMonitor() *authpool.Monitor {
 
 // runLoop is the main daemon loop.
 func (d *Daemon) runLoop() {
-	// Skip legacy refresh if pool monitor is handling it
-	usePoolRefresh := d.poolMonitor != nil && d.poolMonitor.IsRunning()
+	// Helper to check if pool monitor is handling refresh
+	shouldUsePoolRefresh := func() bool {
+		return d.poolMonitor != nil && d.poolMonitor.IsRunning()
+	}
 
 	// Do an initial check immediately
-	if !usePoolRefresh {
+	if !shouldUsePoolRefresh() {
 		d.checkAndRefresh()
 	}
 	d.checkAndBackup()
@@ -478,7 +482,8 @@ func (d *Daemon) runLoop() {
 				d.logger.Printf("Updated check interval to %v", interval)
 			}
 		case <-ticker.C:
-			if !usePoolRefresh {
+			// Check each iteration in case pool monitor state changed
+			if !shouldUsePoolRefresh() {
 				d.checkAndRefresh()
 			}
 			d.checkAndBackup()
@@ -542,7 +547,14 @@ func (d *Daemon) acquirePIDLock() error {
 		f.Close()
 		return fmt.Errorf("write pid file: %w", err)
 	}
-	
+
+	// Sync to disk to ensure PID is visible to other processes
+	if err := f.Sync(); err != nil {
+		health.UnlockFile(f)
+		f.Close()
+		return fmt.Errorf("sync pid file: %w", err)
+	}
+
 	// Important: Do NOT close f here. We hold the lock as long as f is open.
 	d.pidFile = f
 	return nil

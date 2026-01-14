@@ -3,6 +3,7 @@ package usage
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/Dicklesworthstone/coding_agent_account_manager/internal/logs"
@@ -234,13 +235,9 @@ func calculateConsistencyFactor(entries []*logs.LogEntry) float64 {
 	// Sort entries by timestamp (they may not be in order)
 	sorted := make([]*logs.LogEntry, len(entries))
 	copy(sorted, entries)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Timestamp.Before(sorted[i].Timestamp) {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+	})
 
 	// Calculate inter-entry gaps
 	var gaps []float64

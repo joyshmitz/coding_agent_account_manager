@@ -154,6 +154,48 @@ func isHexChar(r rune) bool {
 	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
+// ValidateManifestPath checks that a path from the manifest is safe and stays
+// within the bundle directory. Prevents path traversal attacks.
+func ValidateManifestPath(basePath, relPath string) (string, error) {
+	if relPath == "" {
+		return "", &ValidationError{Message: "path is empty"}
+	}
+
+	// Reject absolute paths
+	if filepath.IsAbs(relPath) {
+		return "", &ValidationError{
+			Field:   relPath,
+			Message: "absolute paths are not allowed in manifest",
+		}
+	}
+
+	// Reject paths that attempt traversal
+	if strings.Contains(relPath, "..") {
+		return "", &ValidationError{
+			Field:   relPath,
+			Message: "path traversal not allowed in manifest",
+		}
+	}
+
+	// Join and clean the path
+	fullPath := filepath.Join(basePath, relPath)
+
+	// Verify the resolved path is within basePath
+	cleanBase := filepath.Clean(basePath)
+	cleanFull := filepath.Clean(fullPath)
+
+	// Ensure the full path starts with the base path
+	if !strings.HasPrefix(cleanFull, cleanBase+string(filepath.Separator)) &&
+		cleanFull != cleanBase {
+		return "", &ValidationError{
+			Field:   relPath,
+			Message: "path escapes bundle directory",
+		}
+	}
+
+	return fullPath, nil
+}
+
 // IsCompatibleVersion checks if a manifest was created by a compatible caam version.
 // Returns nil if compatible, or an error describing the incompatibility.
 func IsCompatibleVersion(m *ManifestV1) error {

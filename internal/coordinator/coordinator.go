@@ -534,11 +534,12 @@ func (c *Coordinator) handleResumingState(ctx context.Context, tracker *PaneTrac
 			"error", err)
 	}
 
-	// Mark request complete
+	// Mark request complete and clean up
 	requestID := tracker.GetRequestID()
 	c.mu.Lock()
 	if req, ok := c.requests[requestID]; ok {
 		req.Status = "completed"
+		delete(c.requests, requestID)
 	}
 	c.mu.Unlock()
 
@@ -585,6 +586,7 @@ func (c *Coordinator) ReceiveAuthResponse(resp AuthResponse) error {
 
 		c.mu.Lock()
 		req.Status = "failed"
+		delete(c.requests, resp.RequestID)
 		c.mu.Unlock()
 
 		if c.OnAuthFailed != nil {

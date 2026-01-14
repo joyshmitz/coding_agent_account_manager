@@ -142,20 +142,23 @@ func (t *Tracker) Capture(provider string) (*AuthState, error) {
 }
 
 // CaptureAll captures auth states for all providers.
+// Returns partial results and the last error encountered, if any.
 func (t *Tracker) CaptureAll() (map[string]*AuthState, error) {
 	providers := []string{"claude", "codex", "gemini"}
 	results := make(map[string]*AuthState)
+	var lastErr error
 
 	for _, p := range providers {
 		state, err := t.Capture(p)
 		if err != nil {
-			// Non-fatal: continue with other providers
+			// Non-fatal: continue with other providers but track error
+			lastErr = fmt.Errorf("capture %s: %w", p, err)
 			continue
 		}
 		results[p] = state
 	}
 
-	return results, nil
+	return results, lastErr
 }
 
 // GetState returns the last captured state for a provider.
@@ -211,13 +214,16 @@ func (t *Tracker) DetectChange(provider string) (*Change, error) {
 }
 
 // DetectAllChanges checks all providers for changes.
+// Returns detected changes and the last error encountered, if any.
 func (t *Tracker) DetectAllChanges() ([]Change, error) {
 	providers := []string{"claude", "codex", "gemini"}
 	var changes []Change
+	var lastErr error
 
 	for _, p := range providers {
 		change, err := t.DetectChange(p)
 		if err != nil {
+			lastErr = fmt.Errorf("detect %s: %w", p, err)
 			continue
 		}
 		if change.Type != ChangeNone {
@@ -225,7 +231,7 @@ func (t *Tracker) DetectAllChanges() ([]Change, error) {
 		}
 	}
 
-	return changes, nil
+	return changes, lastErr
 }
 
 // MatchesProfile checks if current auth matches a saved profile.
@@ -403,9 +409,13 @@ func StatePath() string {
 	if caamHome := os.Getenv("CAAM_HOME"); caamHome != "" {
 		return filepath.Join(caamHome, "data", "auth_state.json")
 	}
-	homeDir, _ := os.UserHomeDir()
 	xdgData := os.Getenv("XDG_DATA_HOME")
 	if xdgData == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			// Fallback to current directory if home cannot be determined
+			return filepath.Join(".caam", "auth_state.json")
+		}
 		xdgData = filepath.Join(homeDir, ".local", "share")
 	}
 	return filepath.Join(xdgData, "caam", "auth_state.json")
@@ -414,12 +424,21 @@ func StatePath() string {
 // SaveState persists the current tracker state to disk.
 func (t *Tracker) SaveState() error {
 	t.mu.RLock()
+	// Deep copy to avoid race with concurrent modifications
+	statesCopy := make(map[string]*AuthState, len(t.states))
+	for k, v := range t.states {
+		if v != nil {
+			copied := *v
+			statesCopy[k] = &copied
+		}
+	}
+	t.mu.RUnlock()
+
 	stateFile := &StateFile{
-		States:    t.states,
+		States:    statesCopy,
 		UpdatedAt: time.Now(),
 	}
 	data, err := json.MarshalIndent(stateFile, "", "  ")
-	t.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
