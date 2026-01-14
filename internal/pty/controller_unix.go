@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // unixController implements Controller for Unix systems (Linux, macOS, BSD).
@@ -136,15 +137,15 @@ func (c *unixController) ReadOutput() (string, error) {
 		return "", fmt.Errorf("invalid pty fd")
 	}
 
-	var readfds syscall.FdSet
+	var readfds unix.FdSet
 	if err := fdSet(fd, &readfds); err != nil {
 		return "", err
 	}
 
-	timeout := syscall.Timeval{Sec: 0, Usec: 100000} // 100ms
-	n, err := syscall.Select(fd+1, &readfds, nil, nil, &timeout)
+	timeout := unix.Timeval{Sec: 0, Usec: 100000} // 100ms
+	n, err := unix.Select(fd+1, &readfds, nil, nil, &timeout)
 	if err != nil {
-		if err == syscall.EINTR {
+		if err == unix.EINTR {
 			return "", nil
 		}
 		return "", fmt.Errorf("select on pty: %w", err)
@@ -164,7 +165,7 @@ func (c *unixController) ReadOutput() (string, error) {
 	return "", nil
 }
 
-func fdSet(fd int, set *syscall.FdSet) error {
+func fdSet(fd int, set *unix.FdSet) error {
 	if fd < 0 {
 		return fmt.Errorf("invalid fd")
 	}
@@ -177,7 +178,7 @@ func fdSet(fd int, set *syscall.FdSet) error {
 	return nil
 }
 
-func fdIsSet(fd int, set *syscall.FdSet) bool {
+func fdIsSet(fd int, set *unix.FdSet) bool {
 	if fd < 0 {
 		return false
 	}
