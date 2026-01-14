@@ -860,6 +860,7 @@ func (i *VaultImporter) importOptionalFiles(bundleDir string, manifest *Manifest
 }
 
 // mergeJSONFile merges a JSON file from bundle into an existing local file.
+// Uses atomic write (temp + fsync + rename) to prevent corruption.
 func mergeJSONFile(srcPath, dstPath string) error {
 	// Read source
 	srcData, err := os.ReadFile(srcPath)
@@ -896,7 +897,36 @@ func mergeJSONFile(srcPath, dstPath string) error {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
-	return os.WriteFile(dstPath, merged, 0600)
+	// Atomic write: write to temp file, fsync, then rename
+	tmpPath := dstPath + ".tmp"
+	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err := tmpFile.Write(merged); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 // copyDirectory copies an entire directory.
