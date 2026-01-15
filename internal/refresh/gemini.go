@@ -114,28 +114,23 @@ func UpdateGeminiAuth(path string, resp *GoogleTokenResponse) error {
 		return fmt.Errorf("parse auth file: %w", err)
 	}
 
-	// Access token (support both snake_case and camelCase).
-	if _, ok := auth["access_token"]; ok {
-		auth["access_token"] = resp.AccessToken
-	} else if _, ok := auth["accessToken"]; ok {
-		auth["accessToken"] = resp.AccessToken
-	} else {
-		auth["access_token"] = resp.AccessToken
+	// Check for nested structures common in settings.json
+	updated := false
+	if oauth, ok := auth["oauth"].(map[string]interface{}); ok {
+		updateGeminiTokenMap(oauth, resp)
+		updated = true
+	} else if creds, ok := auth["credentials"].(map[string]interface{}); ok {
+		updateGeminiTokenMap(creds, resp)
+		updated = true
 	}
 
-	// Expiry: prefer existing field name when possible.
-	if resp.ExpiresIn > 0 {
-		expiresAt := time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC().Format(time.RFC3339)
-
-		if _, ok := auth["expiry"]; ok {
-			auth["expiry"] = expiresAt
-		} else if _, ok := auth["expires_at"]; ok {
-			auth["expires_at"] = expiresAt
-		} else if _, ok := auth["expiresAt"]; ok {
-			auth["expiresAt"] = expiresAt
-		} else {
-			auth["expiry"] = expiresAt
-		}
+	// If no nested structure found, or if we want to support flat files too (like oauth_credentials.json),
+	// we check if we should update the top level.
+	// If we updated a nested object, we shouldn't update top level unless it ALSO has token fields.
+	// But usually it's one or the other.
+	// If we didn't find a nested object, assume flat.
+	if !updated {
+		updateGeminiTokenMap(auth, resp)
 	}
 
 	updatedData, err := json.MarshalIndent(auth, "", "  ")
@@ -172,6 +167,32 @@ func UpdateGeminiAuth(path string, resp *GoogleTokenResponse) error {
 	}
 
 	return nil
+}
+
+func updateGeminiTokenMap(m map[string]interface{}, resp *GoogleTokenResponse) {
+	// Access token (support both snake_case and camelCase).
+	if _, ok := m["access_token"]; ok {
+		m["access_token"] = resp.AccessToken
+	} else if _, ok := m["accessToken"]; ok {
+		m["accessToken"] = resp.AccessToken
+	} else {
+		m["access_token"] = resp.AccessToken
+	}
+
+	// Expiry: prefer existing field name when possible.
+	if resp.ExpiresIn > 0 {
+		expiresAt := time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC().Format(time.RFC3339)
+
+		if _, ok := m["expiry"]; ok {
+			m["expiry"] = expiresAt
+		} else if _, ok := m["expires_at"]; ok {
+			m["expires_at"] = expiresAt
+		} else if _, ok := m["expiresAt"]; ok {
+			m["expiresAt"] = expiresAt
+		} else {
+			m["expiry"] = expiresAt
+		}
+	}
 }
 
 // UpdateGeminiHealth updates the health metadata with the new expiry.

@@ -11,6 +11,8 @@ daemon.log
 daemon.pid
 bd.sock
 bd.sock.startlock
+daemon-error
+.sync.lock
 
 # Sync runtime/backoff state (created/removed by bd sync)
 sync-state.json

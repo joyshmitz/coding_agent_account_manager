@@ -287,7 +287,13 @@ func (b *BurnRateInfo) ProjectDepletion(remaining int64) time.Duration {
 	}
 
 	hoursRemaining := float64(remaining) / b.TokensPerHour
-	return time.Duration(hoursRemaining * float64(time.Hour))
+	ns := hoursRemaining * float64(time.Hour)
+
+	if ns > float64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+
+	return time.Duration(ns)
 }
 
 // ProjectUsageAt estimates token consumption after the given duration.

@@ -127,7 +127,7 @@ func WithSessionWindow(d time.Duration) EngineOption {
 // NewPredictionEngine creates a new prediction engine.
 func NewPredictionEngine(opts ...EngineOption) *PredictionEngine {
 	e := &PredictionEngine{
-		logWindow:     2 * time.Hour,  // Default: look back 2 hours
+		logWindow:     2 * time.Hour,    // Default: look back 2 hours
 		sessionWindow: 30 * time.Minute, // Default: 30 min window for session
 	}
 
@@ -223,17 +223,12 @@ func (e *PredictionEngine) Predict(ctx context.Context, usageInfo *usage.UsageIn
 	pred.TimeToDepletion = time.Duration(hoursUntilDepletion * float64(time.Hour))
 	pred.PredictedTime = time.Now().Add(pred.TimeToDepletion)
 
-	// Cap at window reset time (usage resets before depletion)
-	if !window.ResetsAt.IsZero() && window.ResetsAt.Before(pred.PredictedTime) {
-		pred.PredictedTime = window.ResetsAt
-		pred.TimeToDepletion = time.Until(pred.PredictedTime)
-		if pred.TimeToDepletion < 0 {
-			pred.TimeToDepletion = 0
-		}
-	}
-
 	// Determine warning level
-	if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 10*time.Minute {
+	// We only warn if depletion happens BEFORE the window resets.
+	// If the window resets first, we are safe (quota is restored).
+	if !window.ResetsAt.IsZero() && window.ResetsAt.Before(pred.PredictedTime) {
+		pred.Warning = WarningNone
+	} else if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 10*time.Minute {
 		pred.Warning = WarningImminent
 	} else if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 30*time.Minute {
 		pred.Warning = WarningApproaching
@@ -296,17 +291,10 @@ func (e *PredictionEngine) PredictWithBurnRate(usageInfo *usage.UsageInfo, burnR
 	pred.TimeToDepletion = time.Duration(hoursUntilDepletion * float64(time.Hour))
 	pred.PredictedTime = time.Now().Add(pred.TimeToDepletion)
 
-	// Cap at window reset
-	if !window.ResetsAt.IsZero() && window.ResetsAt.Before(pred.PredictedTime) {
-		pred.PredictedTime = window.ResetsAt
-		pred.TimeToDepletion = time.Until(pred.PredictedTime)
-		if pred.TimeToDepletion < 0 {
-			pred.TimeToDepletion = 0
-		}
-	}
-
 	// Warning level
-	if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 10*time.Minute {
+	if !window.ResetsAt.IsZero() && window.ResetsAt.Before(pred.PredictedTime) {
+		pred.Warning = WarningNone
+	} else if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 10*time.Minute {
 		pred.Warning = WarningImminent
 	} else if pred.TimeToDepletion > 0 && pred.TimeToDepletion < 30*time.Minute {
 		pred.Warning = WarningApproaching

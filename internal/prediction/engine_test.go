@@ -291,8 +291,8 @@ func TestPredictionEngine_Predict_WarningLevels(t *testing.T) {
 		},
 		{
 			name:           "approaching (< 30 min)",
-			percentPerHour: 200, // ~3.3% per minute
-			usedPercent:    90,  // 10% remaining = ~3 min
+			percentPerHour: 200,             // ~3.3% per minute
+			usedPercent:    90,              // 10% remaining = ~3 min
 			wantWarning:    WarningImminent, // Actually this is < 10 min
 		},
 		{
@@ -363,14 +363,16 @@ func TestPredictionEngine_Predict_WindowReset(t *testing.T) {
 		t.Fatalf("Unexpected error: %s", pred.Error)
 	}
 
-	// Prediction should be capped at reset time
-	if pred.PredictedTime.After(resetTime.Add(time.Second)) {
-		t.Errorf("PredictedTime = %v, want <= %v", pred.PredictedTime, resetTime)
+	// Prediction should NOT be capped at reset time anymore.
+	// It should reflect the theoretical depletion time (5 hours).
+	expectedDepletion := 5 * time.Hour
+	if pred.TimeToDepletion < expectedDepletion-10*time.Minute || pred.TimeToDepletion > expectedDepletion+10*time.Minute {
+		t.Errorf("TimeToDepletion = %v, want ~5h", pred.TimeToDepletion)
 	}
 
-	// TimeToDepletion should be ~1 hour (until reset)
-	if pred.TimeToDepletion > 1*time.Hour+time.Minute {
-		t.Errorf("TimeToDepletion = %v, want ~1h", pred.TimeToDepletion)
+	// Since reset happens (1h) before depletion (5h), warning should be None
+	if pred.Warning != WarningNone {
+		t.Errorf("Warning = %v, want WarningNone", pred.Warning)
 	}
 }
 

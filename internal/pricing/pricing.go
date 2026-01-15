@@ -9,7 +9,7 @@ import (
 
 const tokensPerMillion = 1_000_000.0
 
-var dateSuffixPattern = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2})$`)
+var dateSuffixPattern = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2}|\d{4})`)
 
 // TokenPrice represents per-1M token pricing for a model.
 type TokenPrice struct {
