@@ -2488,7 +2488,11 @@ func Run() error {
 	pidPath := signals.DefaultPIDFilePath()
 	pidWritten := false
 	if spmCfg.Runtime.PIDFile {
-		if err := signals.WritePIDFile(pidPath, os.Getpid()); err != nil {
+		// Create PID file directly
+		if err := os.MkdirAll(filepath.Dir(pidPath), 0700); err != nil {
+			return fmt.Errorf("create pid dir: %w", err)
+		}
+		if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0600); err != nil {
 			return fmt.Errorf("write pid file: %w", err)
 		}
 		pidWritten = true
