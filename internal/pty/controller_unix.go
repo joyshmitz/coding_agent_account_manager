@@ -12,10 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/creack/pty"
-	"golang.org/x/sys/unix"
 )
 
 // unixController implements Controller for Unix systems (Linux, macOS, BSD).
@@ -112,9 +110,7 @@ func (c *unixController) InjectRaw(data []byte) error {
 	return nil
 }
 
-// ReadOutput reads all available output from the PTY without blocking.
-// Note: This spawns a goroutine that may outlive the timeout if the PTY
-// is blocked. The goroutine will terminate when Close() is called.
+// ReadOutput reads all available output from the PTY without blocking indefinitely.
 func (c *unixController) ReadOutput() (string, error) {
 	c.mu.Lock()
 	if !c.started {
@@ -128,26 +124,9 @@ func (c *unixController) ReadOutput() (string, error) {
 	ptmx := c.ptmx
 	c.mu.Unlock()
 
-	fd := int(ptmx.Fd())
-	if fd < 0 {
-		return "", fmt.Errorf("invalid pty fd")
-	}
-
-	var readfds unix.FdSet
-	if err := fdSet(fd, &readfds); err != nil {
-		return "", err
-	}
-
-	timeout := unix.Timeval{Sec: 0, Usec: 100000} // 100ms
-	n, err := unix.Select(fd+1, &readfds, nil, nil, &timeout)
-	if err != nil {
-		if err == unix.EINTR {
-			return "", nil
-		}
-		return "", fmt.Errorf("select on pty: %w", err)
-	}
-	if n == 0 || !fdIsSet(fd, &readfds) {
-		return "", nil
+	// Set a short deadline to poll for data
+	if err := ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		return "", fmt.Errorf("set read deadline: %w", err)
 	}
 
 	buf := make([]byte, 4096)
@@ -155,39 +134,24 @@ func (c *unixController) ReadOutput() (string, error) {
 	if nread > 0 {
 		return string(buf[:nread]), nil
 	}
-	if err != nil && err != io.EOF {
+	
+	if err != nil {
+		if os.IsTimeout(err) {
+			return "", nil // No data available within timeout
+		}
+		if err == io.EOF {
+			return "", nil // Process exited
+		}
+		// Check for path error which wraps the syscall error
+		if pathErr, ok := err.(*os.PathError); ok && pathErr.Timeout() {
+			return "", nil
+		}
 		return "", fmt.Errorf("read from pty: %w", err)
 	}
 	return "", nil
 }
 
-func fdSet(fd int, set *unix.FdSet) error {
-	if fd < 0 {
-		return fmt.Errorf("invalid fd")
-	}
-	bitsPerWord := uint(unsafe.Sizeof(set.Bits[0]) * 8)
-	idx := fd / int(bitsPerWord)
-	if idx >= len(set.Bits) {
-		return fmt.Errorf("fd %d out of range", fd)
-	}
-	set.Bits[idx] |= 1 << (uint(fd) % bitsPerWord)
-	return nil
-}
-
-func fdIsSet(fd int, set *unix.FdSet) bool {
-	if fd < 0 {
-		return false
-	}
-	bitsPerWord := uint(unsafe.Sizeof(set.Bits[0]) * 8)
-	idx := fd / int(bitsPerWord)
-	if idx >= len(set.Bits) {
-		return false
-	}
-	return set.Bits[idx]&(1<<(uint(fd)%bitsPerWord)) != 0
-}
-
 // ReadLine reads a single line from the PTY output.
-// Uses select() with short timeouts for interruptibility without goroutine leaks.
 func (c *unixController) ReadLine(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	if !c.started {
@@ -201,11 +165,6 @@ func (c *unixController) ReadLine(ctx context.Context) (string, error) {
 	ptmx := c.ptmx
 	c.mu.Unlock()
 
-	fd := int(ptmx.Fd())
-	if fd < 0 {
-		return "", fmt.Errorf("invalid pty fd")
-	}
-
 	var line []byte
 	buf := make([]byte, 1)
 
@@ -217,28 +176,11 @@ func (c *unixController) ReadLine(ctx context.Context) (string, error) {
 		default:
 		}
 
-		// Use select() with short timeout for interruptibility
-		var readfds unix.FdSet
-		if err := fdSet(fd, &readfds); err != nil {
-			return string(line), err
+		// Set a short deadline to check context periodically
+		if err := ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			return string(line), fmt.Errorf("set read deadline: %w", err)
 		}
 
-		// 100ms timeout allows context cancellation checks
-		selectTimeout := unix.Timeval{Sec: 0, Usec: 100000}
-		n, err := unix.Select(fd+1, &readfds, nil, nil, &selectTimeout)
-		if err != nil {
-			if err == unix.EINTR {
-				continue // Interrupted, retry
-			}
-			return string(line), fmt.Errorf("select on pty: %w", err)
-		}
-
-		if n == 0 || !fdIsSet(fd, &readfds) {
-			// Timeout - loop back to check context
-			continue
-		}
-
-		// Data available, read one byte at a time
 		nread, err := ptmx.Read(buf)
 		if nread > 0 {
 			line = append(line, buf[0])
@@ -246,9 +188,17 @@ func (c *unixController) ReadLine(ctx context.Context) (string, error) {
 				return string(line), nil
 			}
 		}
+		
 		if err != nil {
 			if err == io.EOF {
 				return string(line), io.EOF
+			}
+			if os.IsTimeout(err) {
+				continue // Timeout, check context and retry
+			}
+			// Check for path error
+			if pathErr, ok := err.(*os.PathError); ok && pathErr.Timeout() {
+				continue
 			}
 			return string(line), fmt.Errorf("read from pty: %w", err)
 		}
@@ -256,7 +206,6 @@ func (c *unixController) ReadLine(ctx context.Context) (string, error) {
 }
 
 // WaitForPattern reads output until the pattern matches or timeout.
-// Uses select() with short timeouts for interruptibility without goroutine leaks.
 func (c *unixController) WaitForPattern(ctx context.Context, pattern *regexp.Regexp, timeout time.Duration) (string, error) {
 	if pattern == nil {
 		return "", fmt.Errorf("pattern cannot be nil")
@@ -273,11 +222,6 @@ func (c *unixController) WaitForPattern(ctx context.Context, pattern *regexp.Reg
 	ptmx := c.ptmx
 	c.mu.Unlock()
 
-	fd := int(ptmx.Fd())
-	if fd < 0 {
-		return "", fmt.Errorf("invalid pty fd")
-	}
-
 	var output []byte
 	buf := make([]byte, 4096)
 
@@ -292,28 +236,11 @@ func (c *unixController) WaitForPattern(ctx context.Context, pattern *regexp.Reg
 		default:
 		}
 
-		// Use select() with short timeout for interruptibility
-		var readfds unix.FdSet
-		if err := fdSet(fd, &readfds); err != nil {
-			return string(output), err
+		// Set a short deadline to check context periodically
+		if err := ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			return string(output), fmt.Errorf("set read deadline: %w", err)
 		}
 
-		// 100ms timeout allows context cancellation checks
-		selectTimeout := unix.Timeval{Sec: 0, Usec: 100000}
-		n, err := unix.Select(fd+1, &readfds, nil, nil, &selectTimeout)
-		if err != nil {
-			if err == unix.EINTR {
-				continue // Interrupted, retry
-			}
-			return string(output), fmt.Errorf("select on pty: %w", err)
-		}
-
-		if n == 0 || !fdIsSet(fd, &readfds) {
-			// Timeout - loop back to check context
-			continue
-		}
-
-		// Data available, read it
 		nread, err := ptmx.Read(buf)
 		if nread > 0 {
 			output = append(output, buf[:nread]...)
@@ -321,9 +248,17 @@ func (c *unixController) WaitForPattern(ctx context.Context, pattern *regexp.Reg
 				return string(output), nil
 			}
 		}
+		
 		if err != nil {
 			if err == io.EOF {
 				return string(output), io.EOF
+			}
+			if os.IsTimeout(err) {
+				continue // Timeout, check context and retry
+			}
+			// Check for path error
+			if pathErr, ok := err.(*os.PathError); ok && pathErr.Timeout() {
+				continue
 			}
 			return string(output), fmt.Errorf("read from pty: %w", err)
 		}
